@@ -1,0 +1,298 @@
+const I18N = {
+  en: {
+    
+    'tab.server':   'SERVER',
+    'tab.skins':    'SKINS',
+    'tab.plugins':  'PLUGINS',
+    'tab.binds':    'BINDS',
+    'tab.demo':     'ANALYTICS',
+    'tab.demoViewer':'Demo Viewer',
+    'tab.download': 'DOWNLOAD',
+    'tab.statistics':'Statistics',
+    'tab.statsDefault':'Default',
+    'tab.statsAdvanced':'Advanced',
+    'tab.beta':     'BETA',
+    'tab.betaTitle':'Beta feature',
+    'tab.betaNotice':'Analytics is in beta — these stats come from an experimental model and may be inaccurate.',
+    'tab.betaOk':   'Got it',
+    'tab.settings': 'SETTINGS',
+
+    'nav.back':     'BACK',
+
+    'server.title':    'MAP SELECTION',
+    'server.tag':      'FACEIT POOL',
+    'server.selected': 'SELECTED:',
+    'server.connect':  'CONNECT',
+    'server.copy':     'COPY',
+    'server.join':     'JOIN IN CS2',
+    'server.launch':   'LAUNCH SERVER',
+    'server.launchHint': 'Select a map to launch the server',
+    'server.statusLabel': 'SERVER',
+    'server.mapLabel':    'MAP',
+
+    'skins.title': 'WEAPON SKINS',
+    'skins.tag':   'WEAPON PRINTS',
+    'skins.desc':  'Enter your SteamID64 or paste your Steam profile link and click APPLY to apply your weapon skins on the server.',
+    'skins.idLabel': 'STEAM ID 64 OR PROFILE LINK',
+    'skins.idPlaceholder': '76561198… or steamcommunity.com/id/yourname',
+    'skins.apply': 'APPLY',
+    'skins.idHint': 'Paste a profile link and click APPLY — it becomes your SteamID64 automatically.',
+    'skins.editor': 'OPEN SKIN EDITOR',
+    'skins.editorSub': 'Configure weapon skins, knives & gloves',
+
+    'plugins.title': 'PLUGINS',
+    'plugins.tag':   'CS2 MODS',
+    'plugins.win':   'WINDOWS',
+    'plugins.lin':   'LINUX',
+    'plugins.manage':  'MANAGE',
+    'plugins.check':   'CHECK UPDATES',
+    'plugins.function': 'FUNCTION',
+    'plugins.opencsgo': 'OPEN SERVER FOLDER',
+    'plugins.configure': 'CONFIGURE',
+    'plugins.adminLabel': 'SERVER ADMIN STEAM ID64',
+    'plugins.save': 'SAVE',
+    'plugins.adminHint': 'Sets the server admin with full access (@css/root)',
+
+    'binds.title': 'BINDS',
+    'binds.tag':   'CLIENT CONFIG',
+    'binds.desc':  'Bind plugin chat-commands to keys. This generates sBinds.cfg in your CS2 cfg folder — run exec sBinds in the game console to apply them.',
+    'binds.loading': 'Loading commands…',
+    'binds.count': '0 binds set',
+    'binds.clear': 'CLEAR ALL',
+    'binds.save':  'SAVE sBinds.cfg',
+
+    'demo.title': 'DEMO VIEWER',
+    'demo.tag':   '2D REPLAY',
+    'demo.desc':  'Drop in .dem files (or a .zip of several) and they parse in the background, one at a time. Parsed demos stay in your local library below — click any to replay it in 2D.',
+    'demo.dropTitle': 'Drop demos here, or click to choose',
+    'demo.dropSub':   '.dem · .dem.gz · .dem.zst · .zip — parsed locally, nothing goes online.',
+    'demo.queue':   'PARSE QUEUE',
+    'demo.library': 'LIBRARY',
+    'demo.voiceList': 'Voice list',
+    'demo.legend':  'SCROLL zoom · DRAG pan · CLICK player → setpos · C draw · Z clear · F fullscreen',
+
+    'download.title': 'DOWNLOAD SERVER',
+    'download.tag':   'CS2 DEDICATED',
+    'download.checking': 'Checking…',
+    'download.desc':  'Downloads SteamCMD and installs a CS2 Dedicated Server into the cs2Server/ folder next to cs2prak.exe. Requires ~64 GB of free disk space and may take 10–30 minutes.',
+    'download.btn':    'DOWNLOAD SERVER',
+    'download.update': 'UPDATE SERVER',
+
+    'settings.title': 'SETTINGS',
+    'settings.tag':   'PREFERENCES',
+    'settings.desc':  'Local preferences for this launcher. Everything here is stored on your machine only.',
+    'settings.language':     'Language',
+    'settings.languageSub':  'Interface language for menus and labels.',
+    'settings.tutorial':     'Tutorial',
+    'settings.tutorialToggle': 'Show tutorial on launch',
+    'settings.tutorialSub':  'A short guided tour of the key controls, shown the first time you open the app.',
+    'settings.tutorialRestart': 'RESTART TUTORIAL',
+    'settings.theme':    'Theme',
+    'settings.themeSub': 'Soft colour palettes — pick the one you like.',
+    'settings.themeDark': 'Dark',
+    'settings.themePink': 'Soft Pink',
+    'settings.themeBlue': 'Blue-Gray',
+    'settings.pencil':    'Demo pencil',
+    'settings.pencilSub': 'Draw on the demo viewer. In the viewer press C to switch between drawing and camera, Z to clear.',
+    'settings.pencilToggle': 'Enable drawing (C / Z)',
+
+    'tour.back': 'Back',
+    'tour.next': 'Next',
+    'tour.done': 'Done',
+    'tour.skip': 'Skip',
+
+    'tour.welcome.title': 'Welcome',
+    'tour.welcome.text':  'This is a quick tour of the launcher — the handful of controls you’ll actually use. Use Next / Back to move, or Skip to leave any time.',
+    'tour.maps.title': 'Pick a map',
+    'tour.maps.text':  'Click any map in the pool to select it. The chosen map is what the practice server boots into.',
+    'tour.launch.title': 'Launch the server',
+    'tour.launch.text':  'With a map selected, hit LAUNCH SERVER. When it’s up you’ll get a connect address and a JOIN IN CS2 button.',
+    'tour.steamid.title': 'Your SteamID',
+    'tour.steamid.text':  'Paste your SteamID64 or your Steam profile link, then APPLY. This is who the skins get applied to.',
+    'tour.skineditor.title': 'Skin editor',
+    'tour.skineditor.text':  'Open the editor to set skins, knives and gloves per weapon — wear, seed, name tags, StatTrak and stickers included.',
+    'tour.os.title': 'Pick your OS',
+    'tour.os.text':  'Toggle Windows / Linux so plugin downloads and update checks match your server platform.',
+    'tour.plugins.title': 'Check for updates',
+    'tour.plugins.text':  'Open the FUNCTION menu to check for plugin updates, manage which are enabled, configure the server, or open the server folder.',
+    'tour.binds.title': 'Bind commands',
+    'tour.binds.text':  'Expand a group and assign plugin chat-commands to keys.',
+    'tour.bindsSave.title': 'Save your binds',
+    'tour.bindsSave.text':  'SAVE writes sBinds.cfg into your CS2 cfg folder. Run exec sBinds in the game console to load it.',
+    'tour.demoDrop.title': 'Add demos',
+    'tour.demoDrop.text':  'Drop .dem files (or a .zip of several) here. They parse locally in the background — nothing is uploaded.',
+    'tour.demoList.title': 'Your library',
+    'tour.demoList.text':  'Parsed demos land here. Click one to open the 2D replay. Inside the viewer, the gear sets overlays and the ⛶ button goes fullscreen.',
+    'tour.download.title': 'Get the server files',
+    'tour.download.text':  'No CS2 server yet? This installs a dedicated server via SteamCMD. UPDATE keeps an existing install current.',
+    'tour.settings.title': 'Settings',
+    'tour.settings.text':  'Switch language here, and re-run this tour any time with RESTART TUTORIAL. That’s it — enjoy.',
+  },
+
+  ru: {
+    
+    'tab.server':   'СЕРВЕР',
+    'tab.skins':    'СКИНЫ',
+    'tab.plugins':  'ПЛАГИНЫ',
+    'tab.binds':    'БИНДЫ',
+    'tab.demo':     'АНАЛИТИКА',
+    'tab.demoViewer':'Просмотр демо',
+    'tab.download': 'ЗАГРУЗКА',
+    'tab.statistics':'Статистика',
+    'tab.statsDefault':'Базовая',
+    'tab.statsAdvanced':'Продвинутая',
+    'tab.beta':     'БЕТА',
+    'tab.betaTitle':'Бета-функция',
+    'tab.betaNotice':'Аналитика в бете — статистика основана на экспериментальной модели и может ошибаться.',
+    'tab.betaOk':   'Понятно',
+    'tab.settings': 'НАСТРОЙКИ',
+
+    'nav.back':     'НАЗАД',
+
+    'server.title':    'ВЫБОР КАРТЫ',
+    'server.tag':      'ПУЛ FACEIT',
+    'server.selected': 'ВЫБРАНО:',
+    'server.connect':  'ПОДКЛЮЧЕНИЕ',
+    'server.copy':     'КОПИЯ',
+    'server.join':     'ЗАЙТИ В CS2',
+    'server.launch':   'ЗАПУСТИТЬ СЕРВЕР',
+    'server.launchHint': 'Выберите карту, чтобы запустить сервер',
+    'server.statusLabel': 'СЕРВЕР',
+    'server.mapLabel':    'КАРТА',
+
+    'skins.title': 'СКИНЫ ОРУЖИЯ',
+    'skins.tag':   'РАСКРАСКИ',
+    'skins.desc':  'Введите свой SteamID64 или вставьте ссылку на профиль Steam и нажмите ПРИМЕНИТЬ, чтобы применить скины оружия на сервере.',
+    'skins.idLabel': 'STEAM ID 64 ИЛИ ССЫЛКА НА ПРОФИЛЬ',
+    'skins.idPlaceholder': '76561198… или steamcommunity.com/id/yourname',
+    'skins.apply': 'ПРИМЕНИТЬ',
+    'skins.idHint': 'Вставьте ссылку на профиль и нажмите ПРИМЕНИТЬ — она сама превратится в ваш SteamID64.',
+    'skins.editor': 'ОТКРЫТЬ РЕДАКТОР СКИНОВ',
+    'skins.editorSub': 'Настройка скинов оружия, ножей и перчаток',
+
+    'plugins.title': 'ПЛАГИНЫ',
+    'plugins.tag':   'МОДЫ CS2',
+    'plugins.win':   'WINDOWS',
+    'plugins.lin':   'LINUX',
+    'plugins.manage':  'УПРАВЛЕНИЕ',
+    'plugins.check':   'ПРОВЕРИТЬ ОБНОВЛЕНИЯ',
+    'plugins.function': 'ФУНКЦИИ',
+    'plugins.opencsgo': 'ОТКРЫТЬ ПАПКУ СЕРВЕРА',
+    'plugins.configure': 'НАСТРОИТЬ',
+    'plugins.adminLabel': 'STEAM ID64 АДМИНА СЕРВЕРА',
+    'plugins.save': 'СОХРАНИТЬ',
+    'plugins.adminHint': 'Назначает администратора сервера с полным доступом (@css/root)',
+
+    'binds.title': 'БИНДЫ',
+    'binds.tag':   'КОНФИГ КЛИЕНТА',
+    'binds.desc':  'Привяжите чат-команды плагинов к клавишам. Это создаёт файл sBinds.cfg в папке cfg вашей CS2 — выполните exec sBinds в консоли игры, чтобы применить их.',
+    'binds.loading': 'Загрузка команд…',
+    'binds.count': '0 биндов задано',
+    'binds.clear': 'ОЧИСТИТЬ ВСЁ',
+    'binds.save':  'СОХРАНИТЬ sBinds.cfg',
+
+    'demo.title': 'ПРОСМОТР ДЕМО',
+    'demo.tag':   '2D ПОВТОР',
+    'demo.desc':  'Перетащите файлы .dem (или .zip с несколькими) — они разберутся в фоне, по одному. Разобранные демо остаются в локальной библиотеке ниже — нажмите на любое, чтобы воспроизвести его в 2D.',
+    'demo.dropTitle': 'Перетащите демо сюда или нажмите для выбора',
+    'demo.dropSub':   '.dem · .dem.gz · .dem.zst · .zip — обрабатывается локально, ничего не уходит в сеть.',
+    'demo.voiceList': 'Кто говорит',
+    'demo.queue':   'ОЧЕРЕДЬ РАЗБОРА',
+    'demo.library': 'БИБЛИОТЕКА',
+    'demo.legend':  'КОЛЕСО зум · ПЕРЕТАСК. сдвиг · КЛИК по игроку → setpos · C рисование · Z очистить · F во весь экран',
+
+    'download.title': 'ЗАГРУЗКА СЕРВЕРА',
+    'download.tag':   'ВЫДЕЛЕННЫЙ CS2',
+    'download.checking': 'Проверка…',
+    'download.desc':  'Скачивает SteamCMD и устанавливает выделенный сервер CS2 в папку cs2Server/ рядом с cs2prak.exe. Требуется ~64 ГБ свободного места, может занять 10–30 минут.',
+    'download.btn':    'СКАЧАТЬ СЕРВЕР',
+    'download.update': 'ОБНОВИТЬ СЕРВЕР',
+
+    'settings.title': 'НАСТРОЙКИ',
+    'settings.tag':   'ПАРАМЕТРЫ',
+    'settings.desc':  'Локальные настройки этого лаунчера. Всё здесь хранится только на вашем компьютере.',
+    'settings.language':     'Язык',
+    'settings.languageSub':  'Язык интерфейса для меню и подписей.',
+    'settings.tutorial':     'Обучение',
+    'settings.tutorialToggle': 'Показывать обучение при запуске',
+    'settings.tutorialSub':  'Короткий гид по основным элементам, который показывается при первом запуске приложения.',
+    'settings.tutorialRestart': 'ЗАПУСТИТЬ ОБУЧЕНИЕ ЗАНОВО',
+    'settings.theme':    'Тема',
+    'settings.themeSub': 'Мягкие цветовые палитры — выбери, какая нравится.',
+    'settings.themeDark': 'Тёмная',
+    'settings.themePink': 'Розовая',
+    'settings.themeBlue': 'Голубо-серая',
+    'settings.pencil':    'Карандаш в демке',
+    'settings.pencilSub': 'Рисование в просмотрщике демо. В просмотре: C — переключить рисование/камеру, Z — стереть.',
+    'settings.pencilToggle': 'Включить рисование (C / Z)',
+
+    'tour.back': 'Назад',
+    'tour.next': 'Далее',
+    'tour.done': 'Готово',
+    'tour.skip': 'Пропустить',
+
+    'tour.welcome.title': 'Добро пожаловать',
+    'tour.welcome.text':  'Это краткий обзор лаунчера — те несколько элементов, которыми вы реально будете пользоваться. Жмите Далее / Назад или Пропустить в любой момент.',
+    'tour.maps.title': 'Выберите карту',
+    'tour.maps.text':  'Нажмите на любую карту из пула, чтобы выбрать её. С этой картой и запустится тренировочный сервер.',
+    'tour.launch.title': 'Запустите сервер',
+    'tour.launch.text':  'Выбрав карту, нажмите ЗАПУСТИТЬ СЕРВЕР. Когда он поднимется, появятся адрес подключения и кнопка ЗАЙТИ В CS2.',
+    'tour.steamid.title': 'Ваш SteamID',
+    'tour.steamid.text':  'Вставьте свой SteamID64 или ссылку на профиль Steam и нажмите ПРИМЕНИТЬ. Именно к этому профилю применятся скины.',
+    'tour.skineditor.title': 'Редактор скинов',
+    'tour.skineditor.text':  'Откройте редактор, чтобы задать скины, ножи и перчатки для каждого оружия — износ, сид, имена, StatTrak и стикеры.',
+    'tour.os.title': 'Выберите ОС',
+    'tour.os.text':  'Переключите Windows / Linux, чтобы загрузки плагинов и проверки обновлений соответствовали платформе вашего сервера.',
+    'tour.plugins.title': 'Проверьте обновления',
+    'tour.plugins.text':  'Откройте меню FUNCTION: проверить обновления плагинов, управлять включёнными, настроить сервер или открыть папку сервера.',
+    'tour.binds.title': 'Привяжите команды',
+    'tour.binds.text':  'Разверните группу и назначьте чат-команды плагинов на клавиши.',
+    'tour.bindsSave.title': 'Сохраните бинды',
+    'tour.bindsSave.text':  'СОХРАНИТЬ создаёт sBinds.cfg в папке cfg вашей CS2. Выполните exec sBinds в консоли игры, чтобы загрузить его.',
+    'tour.demoDrop.title': 'Добавьте демо',
+    'tour.demoDrop.text':  'Перетащите сюда файлы .dem (или .zip с несколькими). Они обрабатываются локально в фоне — ничего не загружается в сеть.',
+    'tour.demoList.title': 'Ваша библиотека',
+    'tour.demoList.text':  'Разобранные демо попадают сюда. Нажмите на одно, чтобы открыть 2D-повтор. Внутри плеера шестерёнка задаёт оверлеи, а кнопка ⛶ включает полноэкранный режим.',
+    'tour.download.title': 'Скачайте файлы сервера',
+    'tour.download.text':  'Ещё нет сервера CS2? Здесь устанавливается выделенный сервер через SteamCMD. ОБНОВИТЬ поддерживает существующую установку в актуальном состоянии.',
+    'tour.settings.title': 'Настройки',
+    'tour.settings.text':  'Здесь меняется язык, а обзор можно запустить заново кнопкой ЗАПУСТИТЬ ОБУЧЕНИЕ ЗАНОВО. Вот и всё — приятного пользования.',
+  },
+};
+
+let CUR = 'en';
+
+function t(key) {
+  return (I18N[CUR] || I18N.en)[key] ?? I18N.en[key] ?? key;
+}
+
+function applyLang(lang) {
+  if (!I18N[lang]) lang = 'en';
+  CUR = lang;
+  try { localStorage.setItem('cs2prak_lang', lang); } catch (e) {}
+  document.documentElement.lang = lang;
+
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const key  = el.getAttribute('data-i18n');
+    const attr = el.getAttribute('data-i18n-attr');
+    const val  = t(key);
+    if (attr) el.setAttribute(attr, val);
+    else      el.textContent = val;
+  });
+
+  document.dispatchEvent(new CustomEvent('langchange', { detail: { lang } }));
+}
+
+(function () {
+  let saved = 'en';
+  try { saved = localStorage.getItem('cs2prak_lang') || 'en'; } catch (e) {}
+  CUR = I18N[saved] ? saved : 'en';
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => applyLang(CUR));
+  } else {
+    applyLang(CUR);
+  }
+})();
+
+window.t = t;
+window.applyLang = applyLang;

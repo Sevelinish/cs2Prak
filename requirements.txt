@@ -1,0 +1,19 @@
+# cs2prak runtime dependencies (Windows, Python 3.11)
+Flask==3.1.0
+waitress==3.0.2
+demoparser2==0.41.3
+polars==1.41.2
+pyogg==0.6.14a1
+zstandard==0.25.0
+pystray==0.19.5
+Pillow==12.1.1
+mysql-mimic==3.0.4
+sqlglot==30.8.0
+PyMySQL==1.2.0
+
+# Pulled in transitively by demoparser2 / polars, listed for the frozen build
+numpy==2.4.3
+pandas==3.0.3
+
+# Build only (not needed to run from source)
+# pyinstaller==6.20.0

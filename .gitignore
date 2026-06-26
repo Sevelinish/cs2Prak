@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# PyInstaller build output
+build/
+dist/
+*.manifest
+
+# Runtime / user data — created next to the exe at runtime, never commit
+skins.db
+*.db
+faceit_key.txt
+plugin_versions.json
+demo_library.json
+faceit_avatars.json
+demos_cache/
+cs2Server/
+
+# Logs & local backups
+*.log
+*_backup*/
+_databackup_*/
+_audit_backup_*/
+design_backup_*/
+
+# OS / editor cruft
+Thumbs.db
+.DS_Store
+.idea/
+.vscode/
