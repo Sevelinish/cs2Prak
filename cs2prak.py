@@ -136,6 +136,8 @@ def _on_quit(icon, item):
                 server.cs2_process.terminate()
             except Exception:
                 pass
+    if server.is_update_staged():
+        server.apply_staged_update()
     icon.stop()
     os._exit(0)
 
@@ -150,6 +152,8 @@ def main():
 
     threading.Thread(target=_run_flask, daemon=True).start()
     threading.Timer(1.5, lambda: webbrowser.open('http://127.0.0.1:5000')).start()
+
+    server.start_update_check()
 
     threading.Thread(target=_monitor_console_minimize, daemon=True).start()
 

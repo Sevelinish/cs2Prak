@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import zipfile
 import tarfile
+import hashlib
 import shutil
 import socket
 import urllib.request
@@ -47,6 +48,9 @@ def _safe_cache_key(key):
     """Cache keys are sha1 hex; reject anything else so a crafted <key> URL segment
     (Werkzeug allows backslashes) can't escape the cache directory on Windows."""
     return bool(key) and re.fullmatch(r'[0-9a-f]{1,40}', key) is not None
+
+APP_VERSION = '1.0.0'
+UPDATE_REPO = 'Sevelinish/cs2Prak'
 
 MAPS_DIR = os.path.join(_BASE, 'maps')
 
@@ -484,6 +488,124 @@ def _github_latest(repo: str, timeout: int = 8, tag_prefix: str = None) -> dict 
         return None
     except Exception:
         return None
+
+_UPDATE_DIR = os.path.join(tempfile.gettempdir(), 'cs2prak_update')
+_update_state = {'current': APP_VERSION, 'latest': None, 'available': False,
+                 'staged': False, 'status': 'idle', 'message': '', 'files': []}
+
+def _ver_tuple(v):
+    nums = re.findall(r'\d+', v or '')
+    return tuple(int(x) for x in nums[:4]) if nums else (0,)
+
+def _is_newer(latest, current):
+    return _ver_tuple(latest) > _ver_tuple(current)
+
+def get_update_state():
+    return dict(_update_state)
+
+def is_update_staged():
+    return bool(_update_state.get('staged')) and \
+        os.path.isfile(os.path.join(_UPDATE_DIR, 'apply_update.bat'))
+
+def _sha256(path):
+    try:
+        h = hashlib.sha256()
+        with open(path, 'rb') as f:
+            for chunk in iter(lambda: f.read(1 << 20), b''):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+def _download(url, dest):
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    req = urllib.request.Request(url, headers={'User-Agent': 'cs2prak/1.0'})
+    with urllib.request.urlopen(req, timeout=600) as r, open(dest, 'wb') as f:
+        shutil.copyfileobj(r, f)
+
+def _write_apply_script(staging):
+    """Copy exactly the staged files (preserving their relative paths) over the
+    install folder, then relaunch. /E never deletes anything outside what we copy."""
+    install = os.path.dirname(sys.executable)
+    pid = os.getpid()
+    bat = os.path.join(_UPDATE_DIR, 'apply_update.bat')
+    lines = [
+        '@echo off',
+        ':waitloop',
+        f'tasklist /fi "PID eq {pid}" 2>nul | find "{pid}" >nul',
+        'if not errorlevel 1 ( timeout /t 1 /nobreak >nul & goto waitloop )',
+        f'robocopy "{staging}" "{install}" /E /NFL /NDL /NJH /NJS /R:2 /W:2 >nul',
+        f'start "" "{os.path.join(install, "cs2prak.exe")}"',
+    ]
+    with open(bat, 'w', encoding='utf-8') as f:
+        f.write('\r\n'.join(lines) + '\r\n')
+
+def check_and_stage_update():
+    """Background worker: fetch the latest release manifest, hash the local files and
+    download ONLY the changed ones into a staging dir, then write the apply script.
+    Frozen exe only; running from source is a no-op. Non-destructive (writes %TEMP%)."""
+    if not getattr(sys, 'frozen', False):
+        _update_state['status'] = 'dev'
+        return
+    try:
+        rel = _github_latest(UPDATE_REPO, timeout=10)
+        if not rel:
+            _update_state['status'] = 'no-release'
+            return
+        tag = (rel.get('tag_name') or '').strip()
+        _update_state['latest'] = tag
+        if not _is_newer(tag, APP_VERSION):
+            _update_state['status'] = 'up-to-date'
+            return
+        assets = {a.get('name'): a.get('browser_download_url')
+                  for a in rel.get('assets', [])}
+        if 'manifest.json' not in assets:
+            _update_state['status'] = 'no-manifest'
+            return
+        _update_state.update(available=True, status='checking')
+        os.makedirs(_UPDATE_DIR, exist_ok=True)
+        mpath = os.path.join(_UPDATE_DIR, 'manifest.json')
+        _download(assets['manifest.json'], mpath)
+        with open(mpath, encoding='utf-8') as f:
+            manifest = json.load(f)
+        install = os.path.dirname(sys.executable)
+        staging = os.path.join(_UPDATE_DIR, 'staged')
+        shutil.rmtree(staging, ignore_errors=True)
+        changed = []
+        for relpath, meta in (manifest.get('files') or {}).items():
+            rel_os = relpath.replace('/', os.sep)
+            if _sha256(os.path.join(install, rel_os)) == meta.get('sha256'):
+                continue
+            url = assets.get(meta.get('asset'))
+            if not url:
+                _update_state.update(status='asset-missing',
+                                     message=f'Release is missing the asset for {relpath}')
+                return
+            _update_state.update(status='downloading', message=f'Downloading {relpath}…')
+            _download(url, os.path.join(staging, rel_os))
+            changed.append(relpath)
+        if not changed:
+            _update_state.update(status='up-to-date', available=False)
+            return
+        _write_apply_script(staging)
+        _update_state.update(staged=True, status='ready', files=changed,
+                             message=f'Update {tag} ready ({len(changed)} file(s)) — installs on restart.')
+    except Exception as e:
+        _update_state.update(status='error', message=str(e))
+
+def start_update_check():
+    threading.Thread(target=check_and_stage_update, daemon=True).start()
+
+def apply_staged_update():
+    """Launch the swap script (it waits for this process to exit, then installs).
+    Safe no-op if nothing is staged."""
+    bat = os.path.join(_UPDATE_DIR, 'apply_update.bat')
+    if os.path.isfile(bat):
+        subprocess.Popen(['cmd', '/c', bat], creationflags=subprocess.CREATE_NO_WINDOW)
+
+@app.route('/api/update/status')
+def api_update_status():
+    return jsonify(get_update_state())
 
 _WP_CONFIG = os.path.join(
     CSGO_ADDONS,

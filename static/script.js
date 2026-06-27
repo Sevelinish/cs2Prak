@@ -1083,3 +1083,19 @@ async function openPluginManager() {
 managePluginsBtn.addEventListener('click', openPluginManager);
 pmCloseBtn.addEventListener('click', () => pmBackdrop.classList.remove('open'));
 pmBackdrop.addEventListener('click', e => { if (e.target === pmBackdrop) pmBackdrop.classList.remove('open'); });
+
+(function () {
+    let shown = false;
+    function poll() {
+        fetch('/api/update/status').then(r => r.json()).then(s => {
+            if (!s) return;
+            if (s.staged && !shown) {
+                shown = true;
+                showToast(s.message || 'Update downloaded — it installs when you restart.', 'success');
+            } else if (['idle', 'downloading', 'available'].includes(s.status)) {
+                setTimeout(poll, 15000);
+            }
+        }).catch(() => {});
+    }
+    setTimeout(poll, 5000);
+})();
