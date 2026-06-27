@@ -1,6 +1,6 @@
 # cs2prak
 
-A local **CS2 practice-server launcher & companion** for Windows. Spin up a Counter‑Strike 2 dedicated server, apply weapon skins, manage plugins, generate binds, and replay your demos in a built‑in 2D viewer — all from one hand‑built desktop UI.
+A local **CS2 practice-server launcher & companion** for Windows. Spin up a Counter‑Strike 2 dedicated server, apply weapon skins, manage plugins, generate binds, and replay your demos in a built‑in 2D viewer - all from one hand‑built desktop UI.
 
 The app is a Flask backend packaged into a single Windows tray application with PyInstaller; the interface opens in your browser at `http://127.0.0.1:5000` and only ever listens on loopback.
 
@@ -8,13 +8,13 @@ The app is a Flask backend packaged into a single Windows tray application with 
 
 ## Features
 
-- **Server launcher** — pick a map from the FACEIT pool and launch a local CS2 dedicated server; copy the connect string or jump straight into the game.
-- **Skins editor** — configure WeaponPaints skins, knives, gloves, wear, seed, name tags, StatTrak and stickers per weapon (backed by a built‑in MySQL‑over‑SQLite shim, so no MySQL/XAMPP install required).
-- **Plugin manager** — install/update CounterStrikeSharp, Metamod, MatchZy, WeaponPaints and more from their official GitHub releases; enable/disable installed plugins.
-- **Binds generator** — bind plugin chat‑commands to keys and export `sBinds.cfg`.
-- **Demo viewer (Analytics)** — drop in `.dem` / `.dem.gz` / `.dem.zst` (or a `.zip`); they parse locally into a 2D radar replay with kill feed, voice, grenade visuals (smoke/molotov/HE/flash) and a freehand pencil.
-- **Statistics** — a scoreboard view plus an **Advanced** per‑player "duel lab" (reaction, crosshair placement, first‑bullet, counter‑strafe). *(beta)*
-- **Polish** — EN/RU interface, three colour themes, and a first‑run guided tour.
+- **Server launcher** - pick a map from the FACEIT pool and launch a local CS2 dedicated server; copy the connect string or jump straight into the game.
+- **Skins editor** - configure WeaponPaints skins, knives, gloves, wear, seed, name tags, StatTrak and stickers per weapon (backed by a built‑in MySQL‑over‑SQLite shim, so no MySQL/XAMPP install required).
+- **Plugin manager** - install/update CounterStrikeSharp, Metamod, MatchZy, WeaponPaints and more from their official GitHub releases; enable/disable installed plugins.
+- **Binds generator** - bind plugin chat‑commands to keys and export `sBinds.cfg`.
+- **Demo viewer (Analytics)** - drop in `.dem` / `.dem.gz` / `.dem.zst` (or a `.zip`); they parse locally into a 2D radar replay with kill feed, voice, grenade visuals (smoke/molotov/HE/flash) and a freehand pencil.
+- **Statistics** - a scoreboard view plus an **Advanced** per‑player "duel lab" (reaction, crosshair placement, first‑bullet, counter‑strafe). *(beta)*
+- **Polish** - EN/RU interface, three colour themes, and a first‑run guided tour.
 
 > Everything runs and stays on your machine. Demos are parsed locally; nothing is uploaded.
 
@@ -38,9 +38,9 @@ pip install -r requirements.txt
 python app.py
 ```
 
-Then open <http://127.0.0.1:5000>. (`app.py` is the dev entry point — Flask's dev server. The packaged app uses `cs2prak.py`, which adds the system tray, the MySQL shim and a waitress server.)
+Then open <http://127.0.0.1:5000>. (`app.py` is the dev entry point - Flask's dev server. The packaged app uses `cs2prak.py`, which adds the system tray, the MySQL shim and a waitress server.)
 
-The `maps/` folder (map thumbnails) and `static/` must sit next to the entry script — they already do in this repo.
+The `maps/` folder (map thumbnails) and `static/` must sit next to the entry script - they already do in this repo.
 
 ## Build the Windows app
 
@@ -57,8 +57,8 @@ The result is a one‑dir build in `dist/cs2prak/` (`cs2prak.exe` + `_internal/`
 
 | File | Role |
 |------|------|
-| `cs2prak.py` | Packaged entry point — tray icon, MySQL shim, waitress, browser launch |
-| `app.py` | Flask backend — all routes, server control, skins DB, plugin/demo APIs |
+| `cs2prak.py` | Packaged entry point - tray icon, MySQL shim, waitress, browser launch |
+| `app.py` | Flask backend - all routes, server control, skins DB, plugin/demo APIs |
 | `demo.py` | Demo parsing (demoparser2) → 2D replay + per‑player stats |
 | `mysql_sqlite_server.py` | MySQL wire‑protocol server backed by SQLite, for WeaponPaints |
 | `static/`, `templates/` | Frontend (vanilla JS + CSS + Jinja) |
@@ -69,13 +69,13 @@ The result is a one‑dir build in `dist/cs2prak/` (`cs2prak.exe` + `_internal/`
 
 ## Credits
 
-This tool is a launcher — the heavy lifting is done by these community projects (installed from their official releases):
+This tool is a launcher - the heavy lifting is done by these community projects (installed from their official releases):
 
-- **CounterStrikeSharp** — [@roflmuffin](https://github.com/roflmuffin/CounterStrikeSharp)
-- **Metamod:Source** — [AlliedModders](https://github.com/alliedmodders/metamod-source)
-- **MatchZy** — [@shobhit-pathak](https://github.com/shobhit-pathak/MatchZy)
-- **WeaponPaints** — [@Nereziel](https://github.com/Nereziel/cs2-WeaponPaints)
-- **PlayerSettings / MenuManagerCS2 / AnyBaseLibCS2** — [@NickFox007](https://github.com/NickFox007)
+- **CounterStrikeSharp** - [@roflmuffin](https://github.com/roflmuffin/CounterStrikeSharp)
+- **Metamod:Source** - [AlliedModders](https://github.com/alliedmodders/metamod-source)
+- **MatchZy** - [@shobhit-pathak](https://github.com/shobhit-pathak/MatchZy)
+- **WeaponPaints** - [@Nereziel](https://github.com/Nereziel/cs2-WeaponPaints)
+- **PlayerSettings / MenuManagerCS2 / AnyBaseLibCS2** - [@NickFox007](https://github.com/NickFox007)
 
 Built with [Flask](https://flask.palletsprojects.com/), [waitress](https://github.com/Pylons/waitress), [demoparser2](https://github.com/LaihoE/demoparser), [polars](https://github.com/pola-rs/polars), [pystray](https://github.com/moses-palmer/pystray) (LGPL‑3.0), [Pillow](https://github.com/python-pillow/Pillow), [mysql-mimic](https://github.com/kelsin/mysql-mimic) and [PyOgg](https://github.com/TeamPyOgg/PyOgg).
 
