@@ -351,6 +351,7 @@ const _tabBtns  = document.querySelectorAll('.tab-btn');
 const tabsTrack = document.getElementById('tabsTrack');
 let _activeTab  = 0;
 let _pluginsLoaded = false;
+let skinsReady = false, skinsDetail = { server: false, weaponpaints: false };
 
 const _demoDdToggle = document.getElementById('demoDdToggle');
 const _demoDdMenu   = document.getElementById('demoDdMenu');
@@ -359,8 +360,9 @@ _tabBtns.forEach(btn => {
     btn.addEventListener('click', () => {
         if (btn.disabled) return;
         const next = parseInt(btn.dataset.tab);
-        if (isNaN(next)) return;                 
+        if (isNaN(next)) return;
         if (_demoDdMenu) _demoDdMenu.hidden = true;
+        if (next === 1 && !skinsReady) { showSkinsLock(); return; }   
         if (next === _activeTab) { syncDemoDd(next); return; }
         _activeTab = next;
         tabsTrack.style.transform = `translateX(-${(100 / 10) * next}%)`;
@@ -374,7 +376,8 @@ _tabBtns.forEach(btn => {
             loadPlugins();
         }
         if (next === 4 && window.initDemo) window.initDemo();
-        if (next === 5) checkServerInstalled();
+        if (next === 5) { checkServerInstalled(); checkSkinsReady(); }
+        if (next === 2) checkSkinsReady();
         if (next === 8 && window.initStatistics) window.initStatistics();
         if (next === 9 && window.initAdvanced) window.initAdvanced();
     });
@@ -383,6 +386,39 @@ _tabBtns.forEach(btn => {
 function syncDemoDd(active) {
     if (_demoDdToggle) _demoDdToggle.classList.toggle('active', active === 4 || active === 8 || active === 9);
 }
+
+function updateSkinsLock() {
+    const b = document.querySelector('.tab-btn[data-tab="1"]');
+    if (b) b.classList.toggle('locked', !skinsReady);
+}
+function checkSkinsReady() {
+    fetch('/api/skins/ready').then(r => r.json()).then(d => {
+        if (!d) return;
+        skinsReady = !!d.ready; skinsDetail = d;
+        updateSkinsLock();
+    }).catch(() => {});
+}
+const _slBd = document.getElementById('skinsLockBackdrop');
+function showSkinsLock() {
+    const go = document.getElementById('skinsLockGo');
+    if (go) go.textContent = skinsDetail.server ? t('skinsLock.plugins') : t('skinsLock.download');
+    if (_slBd) _slBd.classList.add('open');
+}
+(function () {
+    const close = document.getElementById('skinsLockClose');
+    const go = document.getElementById('skinsLockGo');
+    close && close.addEventListener('click', () => _slBd && _slBd.classList.remove('open'));
+    go && go.addEventListener('click', () => {
+        if (_slBd) _slBd.classList.remove('open');
+        if (!skinsDetail.server) {
+            const t5 = document.querySelector('.tab-btn[data-tab="5"]'); if (t5) t5.click();
+            const dl = document.getElementById('dlServerBtn'); if (dl && !dl.disabled) dl.click();
+        } else {
+            const t2 = document.querySelector('.tab-btn[data-tab="2"]'); if (t2) t2.click();
+        }
+    });
+})();
+checkSkinsReady();
 
 function showBetaNotice(anchor) {
     if (document.getElementById('betaNotice')) return;
@@ -911,6 +947,7 @@ async function pollServerInstallStatus() {
                 updStatusLabel.className   = 'upd-status-label done';
                 showToast('Server installed successfully', 'success');
                 checkServerInstalled();
+                checkSkinsReady();
             } else {
                 updStatusLabel.textContent = 'FAILED';
                 updStatusLabel.className   = 'upd-status-label failed';
@@ -1085,17 +1122,84 @@ pmCloseBtn.addEventListener('click', () => pmBackdrop.classList.remove('open'));
 pmBackdrop.addEventListener('click', e => { if (e.target === pmBackdrop) pmBackdrop.classList.remove('open'); });
 
 (function () {
-    let shown = false;
+    const bd = document.getElementById('appUpdBackdrop');
+    const txt = document.getElementById('appUpdText');
+    const go = document.getElementById('appUpdGo');
+    const later = document.getElementById('appUpdLater');
+    let last = null, phase = 'idle', autoShown = false;
+    const mb = b => (b / 1048576).toFixed(1) + ' MB';
+    const show = () => { if (bd) bd.classList.add('open'); };
+    const hide = () => { if (bd) bd.classList.remove('open'); };
+    const isUpd = s => s && (s.status === 'available' || s.status === 'downloading'
+        || s.status === 'ready' || s.staged);
+
+    function render() {
+        const s = last; if (!s) return;
+        if (s.status === 'ready' || s.staged) {
+            phase = 'ready';
+            txt.textContent = t('update.ready');
+            go.textContent = t('update.restart'); go.disabled = false; later.disabled = false;
+        } else if (s.status === 'downloading') {
+            phase = 'downloading';
+            txt.textContent = t('update.downloading'); go.disabled = true;
+        } else if (s.status === 'available') {
+            phase = 'available';
+            txt.textContent = (s.latest ? s.latest + ' · ' : '') + mb(s.size || 0);
+            go.textContent = t('update.download'); go.disabled = false;
+        }
+    }
+    function openModal() { if (isUpd(last)) { render(); show(); } }
+    window.cs2OpenUpdate = openModal;   
+
+    later && later.addEventListener('click', hide);
+    go && go.addEventListener('click', () => {
+        if (phase === 'available') {
+            fetch('/api/update/download', { method: 'POST' }).catch(() => {});
+            phase = 'downloading'; txt.textContent = t('update.downloading'); go.disabled = true;
+        } else if (phase === 'ready') {
+            txt.textContent = t('update.restarting'); go.disabled = later.disabled = true;
+            fetch('/api/update/apply', { method: 'POST' }).catch(() => {});
+        }
+    });
+
+    function paintSettings(s) {
+        const st = document.getElementById('setUpdStatus');
+        const btn = document.getElementById('setUpdBtn');
+        if (!st || !btn) return;
+        const cur = s.current ? 'v' + s.current : '';
+        if (s.status === 'ready' || s.staged) {
+            st.textContent = cur + ' · ' + t('settings.updReady');
+            btn.hidden = false; btn.textContent = t('update.restart');
+        } else if (s.status === 'available' || s.status === 'downloading') {
+            st.textContent = cur + ' → ' + (s.latest || '') + ' ' + t('settings.updAvail');
+            btn.hidden = false; btn.textContent = t('update.download');
+        } else {
+            st.textContent = cur + ' · ' + t('settings.updLatest');
+            btn.hidden = true;
+        }
+    }
+    const setBtn = document.getElementById('setUpdBtn');
+    setBtn && setBtn.addEventListener('click', openModal);
+
     function poll() {
         fetch('/api/update/status').then(r => r.json()).then(s => {
             if (!s) return;
-            if (s.staged && !shown) {
-                shown = true;
-                showToast(s.message || 'Update downloaded — it installs when you restart.', 'success');
-            } else if (['idle', 'downloading', 'available'].includes(s.status)) {
-                setTimeout(poll, 15000);
+            last = s;
+            const v = document.getElementById('appVersion');
+            if (v && s.current) v.textContent = 'v' + s.current;   
+            paintSettings(s);
+            if (bd && bd.classList.contains('open')) render();    
+
+            if (!autoShown && !s.seen && isUpd(s)) {
+                autoShown = true;
+                fetch('/api/update/seen', { method: 'POST' }).catch(() => {});
+                openModal();
             }
-        }).catch(() => {});
+            const terminal = ['up-to-date', 'dev', 'error', 'no-release', 'no-manifest'];
+            if (!terminal.includes(s.status) && s.status !== 'ready' && !s.staged) {
+                setTimeout(poll, s.status === 'downloading' ? 2000 : 3000);
+            }
+        }).catch(() => { setTimeout(poll, 8000); });
     }
-    setTimeout(poll, 5000);
+    poll();   
 })();

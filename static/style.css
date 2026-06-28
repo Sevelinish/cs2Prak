@@ -23,6 +23,7 @@
     --note: var(--accent);    
 
     --grid-rgba: rgba(255,106,31,0.045);
+    --lock-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M6 10V7a6 6 0 0 1 12 0v3h1a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1h1zm2 0h8V7a4 4 0 0 0-8 0v3z'/%3E%3C/svg%3E");
     --vig-top:   rgba(255,106,31,0.04);
     --vig-bot:   rgba(0,0,0,0.55);
 
@@ -230,6 +231,10 @@ body::before {
     height: 100%;
     max-width: 1280px;
     margin: 0 auto;
+}
+.app-version {
+    font-family: var(--font-mono); font-size: 11px; letter-spacing: 1px;
+    color: var(--text-muted); font-variant-numeric: tabular-nums;
 }
 
 .logo { display: flex; align-items: center; gap: 13px; }
@@ -832,6 +837,41 @@ body::before {
 .toast.success { border-left-color: var(--green); color: var(--green); }
 .toast.error   { border-left-color: var(--red);   color: var(--red); }
 
+.au-backdrop {
+    position: fixed; inset: 0; z-index: 700;
+    background: rgba(6,5,4,0.7);
+    display: flex; align-items: center; justify-content: center;
+    opacity: 0; pointer-events: none; transition: opacity var(--t);
+}
+.au-backdrop.open { opacity: 1; pointer-events: all; }
+.au-modal {
+    width: 380px; max-width: calc(100vw - 32px);
+    background: var(--surface);
+    border: 1px solid var(--line-strong); border-top: 2px solid var(--accent);
+    padding: 22px 24px; box-shadow: 0 18px 50px rgba(0,0,0,0.6);
+}
+.au-h {
+    font-family: var(--font-head); font-size: 15px; font-weight: 700;
+    letter-spacing: 2px; text-transform: uppercase; color: var(--text-primary);
+    margin-bottom: 10px;
+}
+.au-text {
+    font-family: var(--font-mono); font-size: 13px; color: var(--text-secondary);
+    line-height: 1.55; font-variant-numeric: tabular-nums; min-height: 20px;
+}
+.au-btns { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
+.au-btn {
+    font-family: var(--font-head); font-size: 12px; font-weight: 700; letter-spacing: 1.5px;
+    text-transform: uppercase; padding: 9px 16px; cursor: pointer;
+    background: transparent; border: 1px solid var(--line-strong); color: var(--text-secondary);
+    transition: border-color var(--t), color var(--t), background var(--t);
+}
+.au-btn:hover:not(:disabled) { border-color: var(--accent-dim); color: var(--accent); }
+.au-btn:disabled { opacity: 0.4; cursor: default; }
+.au-btn.au-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-deep); }
+.au-btn.au-primary:hover:not(:disabled) { background: var(--accent-hover); color: var(--accent-deep); }
+.upd-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 .os-toggle-wrap { display: flex; align-items: center; gap: 9px; }
 
 .os-lbl {
@@ -1190,6 +1230,14 @@ body::before {
 .set-card-title { font-family: var(--font-head); font-weight: 700; letter-spacing: 1px; font-size: 14px; color: var(--paper-100); }
 .set-card-sub { font-size: 12px; color: var(--text-muted); margin-top: 3px; line-height: 1.5; }
 .set-card-controls { display: flex; flex-direction: column; gap: 12px; margin-top: 14px; }
+.set-upd-status { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); letter-spacing: 1px; font-variant-numeric: tabular-nums; }
+.set-card-controls .btn-check-updates[hidden] { display: none; }
+.set-repo-link { font-family: var(--font-mono); font-size: 12px; letter-spacing: 1px; color: var(--accent); text-decoration: none; border-bottom: 1px solid transparent; align-self: flex-start; transition: border-color var(--t); }
+.set-repo-link:hover { border-bottom-color: var(--accent); }
+.set-repo-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tab-btn.locked { opacity: 0.5; }
+.tab-btn.locked::after { content: ""; display: inline-block; width: 9px; height: 11px; margin-left: 7px; vertical-align: -1px;
+    background: currentColor; -webkit-mask: var(--lock-mask) center/contain no-repeat; mask: var(--lock-mask) center/contain no-repeat; opacity: 0.85; }
 
 .dv-seg, .set-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 0; overflow: hidden; }
 .dv-seg-btn, .set-seg button, .set-seg-btn {

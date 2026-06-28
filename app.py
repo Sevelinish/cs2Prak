@@ -49,7 +49,7 @@ def _safe_cache_key(key):
     (Werkzeug allows backslashes) can't escape the cache directory on Windows."""
     return bool(key) and re.fullmatch(r'[0-9a-f]{1,40}', key) is not None
 
-APP_VERSION = '1.0.0'
+APP_VERSION = '1.0.3'
 UPDATE_REPO = 'Sevelinish/cs2Prak'
 
 MAPS_DIR = os.path.join(_BASE, 'maps')
@@ -491,7 +491,9 @@ def _github_latest(repo: str, timeout: int = 8, tag_prefix: str = None) -> dict 
 
 _UPDATE_DIR = os.path.join(tempfile.gettempdir(), 'cs2prak_update')
 _update_state = {'current': APP_VERSION, 'latest': None, 'available': False,
-                 'staged': False, 'status': 'idle', 'message': '', 'files': []}
+                 'staged': False, 'status': 'idle', 'message': '', 'files': [], 'size': 0,
+                 'seen': False}
+_pending = None
 
 def _ver_tuple(v):
     nums = re.findall(r'\d+', v or '')
@@ -540,10 +542,11 @@ def _write_apply_script(staging):
     with open(bat, 'w', encoding='utf-8') as f:
         f.write('\r\n'.join(lines) + '\r\n')
 
-def check_and_stage_update():
-    """Background worker: fetch the latest release manifest, hash the local files and
-    download ONLY the changed ones into a staging dir, then write the apply script.
-    Frozen exe only; running from source is a no-op. Non-destructive (writes %TEMP%)."""
+def check_update():
+    """Background worker: fetch the latest release manifest, hash local files and work
+    out which files changed and the TOTAL download size — WITHOUT downloading anything.
+    The actual download waits for the user to accept. Frozen exe only."""
+    global _pending
     if not getattr(sys, 'frozen', False):
         _update_state['status'] = 'dev'
         return
@@ -557,44 +560,61 @@ def check_and_stage_update():
         if not _is_newer(tag, APP_VERSION):
             _update_state['status'] = 'up-to-date'
             return
-        assets = {a.get('name'): a.get('browser_download_url')
-                  for a in rel.get('assets', [])}
+        assets = {a.get('name'): a for a in rel.get('assets', [])}
         if 'manifest.json' not in assets:
             _update_state['status'] = 'no-manifest'
             return
-        _update_state.update(available=True, status='checking')
+        _update_state['status'] = 'checking'
         os.makedirs(_UPDATE_DIR, exist_ok=True)
         mpath = os.path.join(_UPDATE_DIR, 'manifest.json')
-        _download(assets['manifest.json'], mpath)
+        _download(assets['manifest.json']['browser_download_url'], mpath)
         with open(mpath, encoding='utf-8') as f:
             manifest = json.load(f)
         install = os.path.dirname(sys.executable)
-        staging = os.path.join(_UPDATE_DIR, 'staged')
-        shutil.rmtree(staging, ignore_errors=True)
-        changed = []
+        changed, size = [], 0
         for relpath, meta in (manifest.get('files') or {}).items():
             rel_os = relpath.replace('/', os.sep)
             if _sha256(os.path.join(install, rel_os)) == meta.get('sha256'):
                 continue
-            url = assets.get(meta.get('asset'))
-            if not url:
+            a = assets.get(meta.get('asset'))
+            if not a:
                 _update_state.update(status='asset-missing',
                                      message=f'Release is missing the asset for {relpath}')
                 return
-            _update_state.update(status='downloading', message=f'Downloading {relpath}…')
-            _download(url, os.path.join(staging, rel_os))
-            changed.append(relpath)
+            changed.append((relpath, a.get('browser_download_url')))
+            size += int(a.get('size') or 0)
         if not changed:
             _update_state.update(status='up-to-date', available=False)
             return
+        _pending = {'tag': tag, 'changed': changed, 'install': install}
+        _update_state.update(available=True, staged=False, status='available',
+                             files=[c[0] for c in changed], size=size,
+                             message=f'Update {tag} available')
+    except Exception as e:
+        _update_state.update(status='error', message=str(e))
+
+def download_update():
+    """User accepted: download exactly the pending changed files into a staging dir
+    and write the apply script. Non-destructive (writes %TEMP% only)."""
+    if not _pending:
+        return
+    try:
+        _update_state['status'] = 'downloading'
+        staging = os.path.join(_UPDATE_DIR, 'staged')
+        shutil.rmtree(staging, ignore_errors=True)
+        for relpath, url in _pending['changed']:
+            _download(url, os.path.join(staging, relpath.replace('/', os.sep)))
         _write_apply_script(staging)
-        _update_state.update(staged=True, status='ready', files=changed,
-                             message=f'Update {tag} ready ({len(changed)} file(s)) — installs on restart.')
+        _update_state.update(staged=True, status='ready',
+                             message=f'Update {_pending["tag"]} downloaded — restart to install.')
     except Exception as e:
         _update_state.update(status='error', message=str(e))
 
 def start_update_check():
-    threading.Thread(target=check_and_stage_update, daemon=True).start()
+    threading.Thread(target=check_update, daemon=True).start()
+
+def start_update_download():
+    threading.Thread(target=download_update, daemon=True).start()
 
 def apply_staged_update():
     """Launch the swap script (it waits for this process to exit, then installs).
@@ -606,6 +626,25 @@ def apply_staged_update():
 @app.route('/api/update/status')
 def api_update_status():
     return jsonify(get_update_state())
+
+@app.route('/api/update/seen', methods=['POST'])
+def api_update_seen():
+    _update_state['seen'] = True
+    return jsonify({'ok': True})
+
+@app.route('/api/update/download', methods=['POST'])
+def api_update_download():
+    if not _pending:
+        return jsonify({'ok': False, 'message': 'No update available'}), 400
+    start_update_download()
+    return jsonify({'ok': True})
+
+@app.route('/api/update/apply', methods=['POST'])
+def api_update_apply():
+    if not is_update_staged():
+        return jsonify({'ok': False, 'message': 'Nothing staged'}), 400
+    threading.Timer(0.6, lambda: (apply_staged_update(), os._exit(0))).start()
+    return jsonify({'ok': True})
 
 _WP_CONFIG = os.path.join(
     CSGO_ADDONS,
@@ -1967,6 +2006,14 @@ def api_plugin_download_status(plugin_id):
 @app.route('/api/server/status')
 def api_server_status():
     return jsonify({'installed': os.path.exists(CS2_EXE)})
+
+@app.route('/api/skins/ready')
+def api_skins_ready():
+    server = os.path.exists(CS2_EXE)
+    wp = next((p for p in PLUGINS_DEF if p['id'] == 'weaponpaints'), None)
+    weaponpaints = bool(wp) and os.path.exists(wp['marker'])
+    return jsonify({'server': server, 'weaponpaints': weaponpaints,
+                    'ready': server and weaponpaints})
 
 @app.route('/api/server/install', methods=['POST'])
 def api_server_install():
