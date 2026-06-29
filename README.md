@@ -24,7 +24,6 @@ The app is a Flask backend packaged into a single Windows tray application with 
 
 - **Windows** 10 / 11 (x64)
 - **Python 3.11** (to run from source or build)
-- ~**64 GB** free disk space if you let it install a full CS2 dedicated server via SteamCMD
 - A free **FACEIT API key** is optional (only needed for FACEIT demo download and avatars)
 
 ---
