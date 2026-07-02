@@ -829,3 +829,176 @@ document.getElementById('stpClearBtn').addEventListener('click', () => {
     syncBoth();
     closeStickerPanel();
 });
+
+// ===== HLTV pro-loadout import =====
+(function () {
+    const bd = document.getElementById('hlBackdrop');
+    if (!bd) return;
+    const urlEl     = document.getElementById('hlUrl');
+    const importBtn = document.getElementById('hlImportBtn');
+    const statusEl  = document.getElementById('hlStatus');
+    const resultsEl = document.getElementById('hlResults');
+    const footEl    = document.getElementById('hlFoot');
+    const selCount  = document.getElementById('hlSelCount');
+    const applyBtn  = document.getElementById('hlApplyBtn');
+    const closeBtn  = document.getElementById('hlCloseBtn');
+
+    let matched = [];
+    let steamid = null;
+
+    const tr = (k, fb) => (typeof t === 'function' && t(k) !== k) ? t(k) : fb;
+    const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g,
+        c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+    function setStatus(msg, kind) {
+        statusEl.textContent = msg || '';
+        statusEl.className = 'hl-status' + (kind ? ' ' + kind : '');
+    }
+    function reset() {
+        matched = []; resultsEl.innerHTML = ''; footEl.style.display = 'none';
+        setStatus('');
+    }
+
+    window.openHltvImport = function (sid) {
+        steamid = sid;
+        reset();
+        bd.classList.add('open');
+        setTimeout(() => urlEl.focus(), 50);
+    };
+    function close() { bd.classList.remove('open'); }
+    closeBtn.addEventListener('click', close);
+    bd.addEventListener('click', e => { if (e.target === bd) close(); });
+
+    const REASONS = {
+        badurl:    () => tr('hltv.err.badurl',    'Not a valid HLTV player link.'),
+        fetch:     () => tr('hltv.err.fetch',     "Couldn't reach HLTV - try again."),
+        noskins:   () => tr('hltv.err.noskins',   'No skins are shown on this HLTV profile.'),
+        nocatalog: () => tr('hltv.err.nocatalog', 'Skin catalogue not ready - install WeaponPaints first.'),
+    };
+
+    async function doImport() {
+        const url = (urlEl.value || '').trim();
+        if (!url) { setStatus(tr('hltv.needUrl', 'Paste an HLTV profile link first.'), 'error'); return; }
+        importBtn.disabled = true;
+        reset();
+        setStatus(tr('hltv.loading', 'Fetching skins from HLTV...'), '');
+        try {
+            const res = await fetch('/api/hltv/skins', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url }),
+            });
+            const d = await res.json();
+            if (!d.ok) {
+                setStatus((REASONS[d.reason] || REASONS.fetch)(), 'error');
+                importBtn.disabled = false;
+                return;
+            }
+            matched = (d.matched || []).map(m => (m._sel = m.default_sel !== false, m));
+            if (!matched.length) {
+                setStatus(tr('hltv.err.noskins', 'No matching skins found.'), 'error');
+                importBtn.disabled = false;
+                return;
+            }
+            const who = d.player ? d.player + ' - ' : '';
+            setStatus(who + matched.length + ' ' + tr('hltv.found', 'skins found'), 'ok');
+            renderResults();
+        } catch {
+            setStatus(tr('hltv.netfail', 'Could not reach the app backend.'), 'error');
+        }
+        importBtn.disabled = false;
+    }
+
+    // rarity slug -> card class (normalise "…-grade" and map contraband/extraordinary)
+    function rarityClass(rarity) {
+        const slug = String(rarity || '').replace(/-grade$/, '');
+        if (!slug) return '';
+        return ' hl-r-' + slug;
+    }
+
+    function renderResults() {
+        resultsEl.innerHTML = '';
+        matched.forEach((m) => {
+            const card = document.createElement('div');
+            card.className = 'hl-card' + rarityClass(m.rarity) + (m._sel ? ' selected' : '');
+            card.innerHTML =
+                '<div class="hl-check"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5"><polyline points="20 6 9 17 4 12"/></svg></div>' +
+                '<div class="hl-img-wrap"><img loading="lazy" src="' + esc(m.image) + '" onerror="this.style.opacity=0"></div>' +
+                '<div class="hl-card-name">' + esc(m.name) + '</div>' +
+                '<div class="hl-card-meta">' +
+                    (m.wear ? '<span class="hl-wear">' + esc(m.wear) + '</span>' : '') +
+                    (m.phase ? '<span class="hl-phase">' + esc(m.phase) + '</span>' : '') +
+                '</div>';
+            card.addEventListener('click', () => {
+                m._sel = !m._sel;
+                card.classList.toggle('selected', m._sel);
+                syncCount();
+            });
+            resultsEl.appendChild(card);
+        });
+        footEl.style.display = 'flex';
+        syncCount();
+    }
+
+    function syncCount() {
+        const n = matched.filter(m => m._sel).length;
+        selCount.textContent = n + ' / ' + matched.length;
+        applyBtn.disabled = n === 0;
+    }
+
+    const EMPTY_STICKERS = ['0;0;0;0;0;0;0', '0;0;0;0;0;0;0', '0;0;0;0;0;0;0', '0;0;0;0;0;0;0', '0;0;0;0;0;0;0'];
+
+    function buildPayload(sel) {
+        const skins = [], knives = [], gloves = [];
+        for (const team of [2, 3]) {
+            for (const m of sel) {
+                const wear = m.wear_float || 0.01;
+                if (m.kind === 'glove') {
+                    gloves.push({ team, defindex: m.weapon_defindex });
+                    if (m.paint_id) skins.push({
+                        team, defindex: m.weapon_defindex, paint_id: m.paint_id,
+                        wear, seed: 0, nametag: null, stattrak: false, stattrak_count: 0,
+                    });
+                } else {
+                    if (m.kind === 'knife' && m.weapon_name) knives.push({ team, knife: m.weapon_name });
+                    skins.push({
+                        team, defindex: m.weapon_defindex, paint_id: m.paint_id,
+                        wear, seed: 0, nametag: null, stattrak: false, stattrak_count: 0,
+                        stickers: EMPTY_STICKERS,
+                    });
+                }
+            }
+        }
+        return { skins, knives, gloves };
+    }
+
+    async function apply() {
+        const sel = matched.filter(m => m._sel);
+        if (!sel.length || !steamid) return;
+        applyBtn.disabled = true;
+        setStatus(tr('hltv.applying', 'Applying...'), '');
+        try {
+            const res = await fetch('/api/player/' + steamid + '/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(buildPayload(sel)),
+            });
+            const d = await res.json();
+            if (d.ok) {
+                setStatus(sel.length + ' ' + tr('hltv.applied', 'skins applied to your loadout'), 'ok');
+                if (typeof showToast === 'function') showToast(tr('hltv.appliedToast', 'Pro loadout applied'), 'success');
+            } else {
+                setStatus('Error: ' + (d.message || '?'), 'error');
+            }
+        } catch {
+            setStatus(tr('hltv.savefail', 'Save failed - is MySQL running?'), 'error');
+        }
+        applyBtn.disabled = false;
+    }
+
+    applyBtn.addEventListener('click', apply);
+    importBtn.addEventListener('click', doImport);
+    urlEl.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); doImport(); }
+    });
+})();

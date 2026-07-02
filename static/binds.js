@@ -322,6 +322,116 @@
         toast('All binds cleared', 'success');
     });
 
+    // ---- Practice-binds modal: recommended training commands, editable + export ----
+    // Reuses the key-capture above (codeToBindKey / MOUSE_MAP). Kept in its own store,
+    // but Export merges with the main binds and writes one sBinds.cfg.
+    const PRACTICE = [
+        { cmd: '.bot',         k: 'recBinds.bot' },
+        { cmd: '.nobots',      k: 'recBinds.nobots' },
+        { cmd: '.clear',       k: 'recBinds.clear' },
+        { cmd: '.rethrow',     k: 'recBinds.rethrow' },
+        { cmd: '.bestspawn',   k: 'recBinds.bestspawn' },
+        { cmd: 'exec expNade', k: 'recBinds.expnade' },
+    ];
+    const LS_PRACTICE = 'cs2prak_practice_binds';
+    let pKeys;
+    try { pKeys = JSON.parse(localStorage.getItem(LS_PRACTICE)); } catch { pKeys = null; }
+    if (!pKeys || typeof pKeys !== 'object') pKeys = {};
+    const pSave = () => localStorage.setItem(LS_PRACTICE, JSON.stringify(pKeys));
+
+    let pcap = null;
+    function pEnd() {
+        document.removeEventListener('keydown', pKey, true);
+        document.removeEventListener('mousedown', pMouse, true);
+        document.removeEventListener('wheel', pWheel, { capture: true });
+        pcap = null;
+    }
+    function pStart(cmd, btn) {
+        cancelCapture(); pEnd();
+        pcap = { cmd, btn };
+        btn.classList.add('capturing'); btn.classList.remove('set'); btn.textContent = 'PRESS KEY…';
+        document.addEventListener('keydown', pKey, true);
+        setTimeout(() => { if (pcap) {
+            document.addEventListener('mousedown', pMouse, true);
+            document.addEventListener('wheel', pWheel, { capture: true, passive: false });
+        } }, 220);
+    }
+    function pKey(e) {
+        e.preventDefault(); e.stopPropagation();
+        if (e.key === 'Escape') { const c = pcap.cmd, b = pcap.btn; pEnd(); pBtn(b, c); return; }
+        const k = codeToBindKey(e); if (k) pAssign(pcap.cmd, k);
+    }
+    function pMouse(e) { const k = MOUSE_MAP[e.button]; if (!k) return; e.preventDefault(); e.stopPropagation(); pAssign(pcap.cmd, k); }
+    function pWheel(e) { e.preventDefault(); e.stopPropagation(); pAssign(pcap.cmd, e.deltaY < 0 ? 'mwheelup' : 'mwheeldown'); }
+    function pAssign(cmd, key) {
+        pEnd();
+        for (const c of Object.keys(pKeys)) if (c !== cmd && pKeys[c] === key) delete pKeys[c];
+        pKeys[cmd] = key; pSave(); pRender();
+    }
+    function pBtn(btn, cmd) {
+        btn.classList.remove('capturing');
+        const k = pKeys[cmd];
+        if (k) { btn.textContent = k.toUpperCase(); btn.classList.add('set'); }
+        else   { btn.textContent = 'SET KEY';       btn.classList.remove('set'); }
+    }
+    function pRender() {
+        const list = document.getElementById('recBindsList');
+        if (!list) return;
+        list.innerHTML = '';
+        PRACTICE.forEach(p => {
+            const row = document.createElement('div'); row.className = 'rb-row';
+            const info = document.createElement('div'); info.className = 'rb-info';
+            const cmd = document.createElement('span'); cmd.className = 'rb-cmd'; cmd.textContent = p.cmd;
+            const desc = document.createElement('span'); desc.className = 'rb-desc'; desc.textContent = t(p.k);
+            info.append(cmd, desc);
+            const wrap = document.createElement('div'); wrap.className = 'rb-key-wrap';
+            const btn = document.createElement('button'); btn.className = 'rb-keybtn';
+            pBtn(btn, p.cmd);
+            btn.addEventListener('click', () => {
+                if (pcap && pcap.cmd === p.cmd) { pEnd(); pBtn(btn, p.cmd); } else pStart(p.cmd, btn);
+            });
+            wrap.appendChild(btn);
+            if (pKeys[p.cmd]) {
+                const clr = document.createElement('button'); clr.className = 'rb-clr'; clr.title = 'Clear';
+                clr.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+                clr.addEventListener('click', () => { delete pKeys[p.cmd]; pSave(); pRender(); });
+                wrap.appendChild(clr);
+            }
+            row.append(info, wrap);
+            list.appendChild(row);
+        });
+    }
+
+    const pBd = document.getElementById('recBindsBackdrop');
+    window.openPracticeBinds = function () { pRender(); if (pBd) pBd.classList.add('open'); };
+    function pClose() { pEnd(); if (pBd) pBd.classList.remove('open'); }
+    const pCloseBtn = document.getElementById('recBindsClose');
+    pCloseBtn && pCloseBtn.addEventListener('click', pClose);
+    pBd && pBd.addEventListener('click', e => { if (e.target === pBd) pClose(); });
+
+    const pExportBtn = document.getElementById('recBindsExport');
+    pExportBtn && pExportBtn.addEventListener('click', async () => {
+        const byKey = {};
+        Object.values(binds).forEach(b => { byKey[b.key] = b.cmd; });
+        PRACTICE.forEach(p => { if (pKeys[p.cmd]) byKey[pKeys[p.cmd]] = p.cmd; });
+        const payload = Object.entries(byKey).map(([key, command]) => ({ key, command }));
+        if (!payload.length) { toast('Bind at least one command first', 'error'); return; }
+        pExportBtn.disabled = true;
+        try {
+            const data = await fetch('/api/binds/generate', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ binds: payload }),
+            }).then(r => r.json());
+            toast(data.written ? 'sBinds.cfg exported — run exec sBinds in CS2'
+                               : 'Saved — CS2 cfg not found, place sBinds.cfg manually', 'success');
+            pClose();
+        } catch { toast('Could not reach backend', 'error'); }
+        pExportBtn.disabled = false;
+    });
+
+    const pExampleBtn = document.getElementById('bindsExampleBtn');
+    pExampleBtn && pExampleBtn.addEventListener('click', () => window.openPracticeBinds());
+
     restore();
     fetch('/api/binds/catalog')
         .then(r => r.json())

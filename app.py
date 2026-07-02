@@ -2,6 +2,7 @@ import os
 import re
 import sys
 import json
+import html
 import math
 import time
 import ctypes
@@ -49,7 +50,7 @@ def _safe_cache_key(key):
     (Werkzeug allows backslashes) can't escape the cache directory on Windows."""
     return bool(key) and re.fullmatch(r'[0-9a-f]{1,40}', key) is not None
 
-APP_VERSION = '1.0.3'
+APP_VERSION = '1.0.8'
 UPDATE_REPO = 'Sevelinish/cs2Prak'
 
 MAPS_DIR = os.path.join(_BASE, 'maps')
@@ -99,6 +100,7 @@ PLUGINS_DEF = [
         'github': 'roflmuffin/CounterStrikeSharp',
         'marker': os.path.join(CSGO_ADDONS, r'counterstrikesharp\bin\win64\counterstrikesharp.dll'),
         'version_src': 'css_deps',
+        'depends_on': ['metamod'],
         'asset_ext': '.zip',
         'asset_os': 'windows',
         'asset_name_prefer': 'with-runtime',
@@ -116,6 +118,7 @@ PLUGINS_DEF = [
         'github': 'NickFox007/AnyBaseLibCS2',
         'marker': os.path.join(CSS_BASE, r'shared\AnyBaseLib\AnyBaseLib.dll'),
         'version_src': 'tracker',
+        'depends_on': ['counterstrikesharp'],
         'asset_ext': '.zip',
         'asset_os': None,
         'extract_to': CSGO_BASE,
@@ -130,6 +133,7 @@ PLUGINS_DEF = [
         'github': 'NickFox007/PlayerSettingsCS2',
         'marker': os.path.join(CSS_PLUGINS, r'PlayerSettings\PlayerSettings.dll'),
         'version_src': 'tracker',
+        'depends_on': ['counterstrikesharp', 'anybaselibcs2'],
         'asset_ext': '.zip',
         'asset_os': None,
         'extract_to': CSGO_BASE,
@@ -144,6 +148,7 @@ PLUGINS_DEF = [
         'github': 'NickFox007/MenuManagerCS2',
         'marker': os.path.join(CSS_PLUGINS, r'MenuManagerCore\MenuManagerCore.dll'),
         'version_src': 'tracker',
+        'depends_on': ['counterstrikesharp', 'anybaselibcs2', 'playersettings'],
         'asset_ext': '.zip',
         'asset_os': None,
         'extract_to': CSGO_BASE,
@@ -158,6 +163,11 @@ PLUGINS_DEF = [
         'github': 'shobhit-pathak/MatchZy',
         'marker': os.path.join(CSS_PLUGINS, r'MatchZy\MatchZy.dll'),
         'version_src': 'tracker',
+        'depends_on': ['counterstrikesharp'],
+        # The "-with-cssharp" bundle ships an OLD CounterStrikeSharp (1.0.342) that
+        # would overwrite the current one — we install CSSharp separately, so take
+        # the plain MatchZy zip.
+        'asset_name_exclude': ['with-cssharp'],
         'asset_ext': '.zip',
         'asset_os': None,
         'extract_to': CSGO_BASE,
@@ -206,6 +216,142 @@ def patch_gameinfo():
     except Exception:
         pass
 
+def _steam_path():
+    """Steam install directory. Reads the registry first so non-default drives
+    (e.g. D:\\steam) are found; falls back to the usual Program Files locations."""
+    try:
+        import winreg
+        for hive, sub, name in (
+            (winreg.HKEY_CURRENT_USER,  r'Software\Valve\Steam',             'SteamPath'),
+            (winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\WOW6432Node\Valve\Steam',  'InstallPath'),
+            (winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\Valve\Steam',              'InstallPath'),
+        ):
+            try:
+                with winreg.OpenKey(hive, sub) as k:
+                    p = os.path.normpath(winreg.QueryValueEx(k, name)[0])
+                    if os.path.isdir(p):
+                        return p
+            except OSError:
+                continue
+    except Exception:
+        pass
+    for p in (os.path.join(os.environ.get('ProgramFiles(x86)', r'C:\Program Files (x86)'), 'Steam'),
+              os.path.join(os.environ.get('ProgramFiles', r'C:\Program Files'), 'Steam'),
+              r'C:\Steam'):
+        if os.path.isdir(p):
+            return p
+    return None
+
+def _steam_libraries():
+    """Every Steam library root: the install dir + all paths in libraryfolders.vdf."""
+    libs = []
+    steam = _steam_path()
+    if steam:
+        libs.append(steam)
+        try:
+            vdf = os.path.join(steam, 'steamapps', 'libraryfolders.vdf')
+            txt = open(vdf, encoding='utf-8', errors='ignore').read()
+            for m in re.findall(r'"path"\s*"([^"]+)"', txt):
+                p = os.path.normpath(m.replace('\\\\', '\\'))
+                if p not in libs:
+                    libs.append(p)
+        except OSError:
+            pass
+    return libs
+
+def _find_existing_cs2_game():
+    for lib in _steam_libraries():
+        g = os.path.join(lib, 'steamapps', 'common',
+                         'Counter-Strike Global Offensive', 'game')
+        if os.path.isfile(os.path.join(g, 'bin', 'win64', 'cs2.exe')):
+            return g
+    return None
+
+def _overlay_is_content(name):
+    n = name.lower()
+    if n == 'gameinfo.gi' or n.endswith('.dem') or n.endswith('.dat'):
+        return False
+    if n.startswith('backup_round') or n.startswith('~vss') or n == 'serverconfig.vdf':
+        return False
+    return True
+
+def build_overlay_from_existing(log: list):
+    """Assemble CS2_GAME as an overlay that reuses the user's installed CS2 content
+    via directory junctions + file hardlinks, with our own gameinfo (Metamod-patched)
+    and addons. The retail install is only READ. Needs the app and CS2 on the same
+    drive (hardlinks). This replaces the 64 GB SteamCMD download."""
+    def say(m): log.append(m)
+    src = _find_existing_cs2_game()
+    if not src:
+        raise RuntimeError('Your installed CS2 was not found in any Steam library.')
+    say(f'[+] Found your CS2: {src}')
+    dst = CS2_GAME
+    src_drive = os.path.splitdrive(os.path.abspath(src))[0].lower()
+    dst_drive = os.path.splitdrive(os.path.abspath(dst))[0].lower()
+    if src_drive != dst_drive:
+        raise RuntimeError(
+            f'cs2prak is on {dst_drive} but CS2 is on {src_drive}. Hardlinks need the '
+            f'same drive — move cs2prak onto {src_drive}, or use the 64 GB Download instead.')
+
+    def junction(link, target):
+        subprocess.run(['cmd', '/c', 'mklink', '/J', link, target],
+                       creationflags=subprocess.CREATE_NO_WINDOW, capture_output=True, text=True)
+
+    os.makedirs(dst, exist_ok=True)
+    for e in os.scandir(src):
+        if e.name.lower() == 'csgo':
+            continue
+        link = os.path.join(dst, e.name)
+        if os.path.exists(link):
+            continue
+        if e.is_dir():
+            junction(link, e.path)
+        elif _overlay_is_content(e.name):
+            try: os.link(e.path, link)
+            except OSError: pass
+    say('[+] Linked engine + content folders (junctions, 0 extra disk).')
+
+    scsgo = os.path.join(dst, 'csgo')
+    src_csgo = os.path.join(src, 'csgo')
+    os.makedirs(scsgo, exist_ok=True)
+    nfiles = 0
+    for e in os.scandir(src_csgo):
+        nl = e.name.lower()
+        link = os.path.join(scsgo, e.name)
+        if e.is_dir():
+            if nl == 'addons':
+                os.makedirs(link, exist_ok=True)
+            elif nl == 'cfg':
+                if not os.path.exists(link):
+                    shutil.copytree(e.path, link)
+            elif not os.path.exists(link):
+                junction(link, e.path)
+        elif nl != 'gameinfo.gi' and _overlay_is_content(e.name) and not os.path.exists(link):
+            try:
+                os.link(e.path, link); nfiles += 1
+            except OSError:
+                pass
+    say(f'[+] Hardlinked {nfiles} content files (VPKs) — 0 extra disk.')
+
+    src_gi = os.path.join(src_csgo, 'gameinfo.gi')
+    raw = open(src_gi, 'rb').read()
+    if raw[:3] == b'\xef\xbb\xbf':
+        raw = raw[3:]
+    txt = raw.decode('utf-8', 'ignore')
+    if 'csgo/addons/metamod' not in txt:
+        if '\t\t\tGame\tcsgo\n' in txt:
+            txt = txt.replace('\t\t\tGame\tcsgo\n',
+                              '\t\t\tGame\tcsgo/addons/metamod\n\t\t\tGame\tcsgo\n', 1)
+        else:
+            txt = txt.replace('\t\t\tGame\tcsgo\r\n',
+                              '\t\t\tGame\tcsgo/addons/metamod\r\n\t\t\tGame\tcsgo\r\n', 1)
+    with open(os.path.join(scsgo, 'gameinfo.gi'), 'wb') as f:
+        f.write(txt.encode('utf-8'))
+    os.makedirs(os.path.join(scsgo, 'addons'), exist_ok=True)
+    say('[+] Wrote our Metamod-patched gameinfo.gi into the overlay (your game stays vanilla).')
+    say(f'[+] Overlay ready at {dst}')
+    say('Done — now install Metamod / CounterStrikeSharp / WeaponPaints in the Plugins tab, then launch.')
+
 def ensure_css_basepath_link(log: list | None = None):
     """Make CounterStrikeSharp find itself on current CS2.
 
@@ -227,14 +373,21 @@ def ensure_css_basepath_link(log: list | None = None):
         return
     drive = os.path.splitdrive(os.path.abspath(CSGO_ADDONS))[0]
     link = os.path.join(drive + os.sep, 'addons')
+    want = os.path.realpath(CSGO_ADDONS).rstrip('\\/').lower()
     try:
-        if os.path.isdir(link):
-            if os.path.realpath(link).rstrip('\\/').lower() == \
-                    os.path.realpath(CSGO_ADDONS).rstrip('\\/').lower():
+        if os.path.lexists(link):
+            try:
+                if os.path.isdir(link) and \
+                        os.path.realpath(link).rstrip('\\/').lower() == want:
+                    return
+            except OSError:
+                pass
+            try:
+                os.rmdir(link)
+            except OSError as e:
+                _say(f'! {link} exists and could not be replaced ({e}). '
+                     f'Remove it manually (rmdir "{link}") and re-run.')
                 return
-            _say(f'! {link} exists but points elsewhere — CSS may not load. '
-                 f'Remove it or repoint it to {CSGO_ADDONS}.')
-            return
         subprocess.run(['cmd', '/c', 'mklink', '/J', link, CSGO_ADDONS],
                        creationflags=subprocess.CREATE_NO_WINDOW,
                        capture_output=True, text=True, timeout=15)
@@ -472,27 +625,40 @@ def _is_outdated(local: str, latest: str) -> bool:
     return tl[-n:] < tr[-n:]
 
 def _github_latest(repo: str, timeout: int = 8, tag_prefix: str = None) -> dict | None:
-    if tag_prefix:
-        url = f'https://api.github.com/repos/{repo}/releases?per_page=50'
-    else:
-        url = f'https://api.github.com/repos/{repo}/releases/latest'
+    """Newest release that actually carries downloadable assets. Deliberately does
+    NOT use /releases/latest — that endpoint hides prereleases, so projects like
+    CounterStrikeSharp (which sometimes flag the newest build as a prerelease)
+    would serve an older stable release. We list releases and pick the highest
+    version (tie-break: publish date), honouring an optional tag prefix."""
+    url = f'https://api.github.com/repos/{repo}/releases?per_page=30'
     req = urllib.request.Request(url, headers={'User-Agent': 'cs2prak/1.0'})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            data = json.loads(r.read().decode())
-        if not tag_prefix:
-            return data
-        for rel in (data if isinstance(data, list) else [data]):
-            if rel.get('tag_name', '').lstrip('v').startswith(tag_prefix):
-                return rel
-        return None
+            rels = json.loads(r.read().decode())
     except Exception:
         return None
+    if not isinstance(rels, list):
+        rels = [rels]
+    stable, pre = [], []
+    for rel in rels:
+        if rel.get('draft') or not rel.get('assets'):
+            continue
+        if tag_prefix and not rel.get('tag_name', '').lstrip('v').startswith(tag_prefix):
+            continue
+        (pre if rel.get('prerelease') else stable).append(rel)
+    # Newest *published* stable release; fall back to prereleases only if a repo
+    # ships nothing else. Sorting by date (not version) avoids old high-numbered
+    # prereleases like "2.0.0-alpha" outranking the current "1.0.370".
+    pool = stable or pre
+    if not pool:
+        return None
+    pool.sort(key=lambda r: r.get('published_at', ''), reverse=True)
+    return pool[0]
 
 _UPDATE_DIR = os.path.join(tempfile.gettempdir(), 'cs2prak_update')
 _update_state = {'current': APP_VERSION, 'latest': None, 'available': False,
                  'staged': False, 'status': 'idle', 'message': '', 'files': [], 'size': 0,
-                 'seen': False}
+                 'seen': False, 'notes': ''}
 _pending = None
 
 def _ver_tuple(v):
@@ -533,6 +699,10 @@ def _write_apply_script(staging):
     bat = os.path.join(_UPDATE_DIR, 'apply_update.bat')
     lines = [
         '@echo off',
+        # The .bat is UTF-8; make cmd read it as UTF-8 so Cyrillic (non-ASCII)
+        # install paths aren't mangled by the OEM codepage — otherwise robocopy
+        # would copy _internal to a garbage path and python311.dll goes missing.
+        'chcp 65001 >nul',
         ':waitloop',
         f'tasklist /fi "PID eq {pid}" 2>nul | find "{pid}" >nul',
         'if not errorlevel 1 ( timeout /t 1 /nobreak >nul & goto waitloop )',
@@ -589,6 +759,7 @@ def check_update():
         _pending = {'tag': tag, 'changed': changed, 'install': install}
         _update_state.update(available=True, staged=False, status='available',
                              files=[c[0] for c in changed], size=size,
+                             notes=(rel.get('body') or '').strip(),
                              message=f'Update {tag} available')
     except Exception as e:
         _update_state.update(status='error', message=str(e))
@@ -799,6 +970,122 @@ def _download_plugin_zip(plugin_id: str, log: list, os_pref: str = 'windows'):
     log.append(f'Saved → {dest_path}')
     log.append('Use OPEN SERVER FOLDER, then drag the archive\'s addons folder into csgo.')
     log.append(f'Done! {plugin["name"]} {tag} downloaded.')
+
+def _safe_extract(archive_path, dest):
+    """Extract a .zip / .tar.gz into dest, refusing any member that would escape
+    dest (zip-slip guard). Every plugin archive unpacks with its final layout at
+    the root (addons/…, cfg/…, or WeaponPaints/…) — no version-folder wrapper."""
+    dest_abs = os.path.abspath(dest)
+
+    def _safe(name):
+        target = os.path.abspath(os.path.join(dest_abs, name))
+        return target == dest_abs or target.startswith(dest_abs + os.sep)
+
+    if archive_path.lower().endswith(('.tar.gz', '.tgz')):
+        with tarfile.open(archive_path) as t:
+            members = [m for m in t.getmembers() if _safe(m.name)]
+            t.extractall(dest_abs, members=members)
+    else:
+        with zipfile.ZipFile(archive_path) as z:
+            members = [n for n in z.namelist() if _safe(n)]
+            z.extractall(dest_abs, members=members)
+
+def _extract_plugin(plugin, archive_path, log):
+    """Unpack a plugin archive into its target folder, keeping user data
+    (configs / plugins / dbs listed in `preserve`) across the update."""
+    extract_to = plugin['extract_to']
+    os.makedirs(extract_to, exist_ok=True)
+    preserve = plugin.get('preserve', [])
+
+    bak = os.path.join(tempfile.gettempdir(), 'cs2prak_pluginbak', plugin['id'])
+    shutil.rmtree(bak, ignore_errors=True)
+    saved = []
+    for rel in preserve:
+        src = os.path.join(extract_to, rel)
+        if os.path.exists(src):
+            dst = os.path.join(bak, rel)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.move(src, dst)
+            saved.append(rel)
+            log.append(f'  · kept your {rel}')
+
+    _safe_extract(archive_path, extract_to)
+    log.append(f'[+] Extracted into {extract_to}')
+
+    for rel in saved:
+        src = os.path.join(bak, rel)
+        dst = os.path.join(extract_to, rel)
+        if os.path.exists(dst):
+            if os.path.isdir(dst):
+                shutil.rmtree(dst, ignore_errors=True)
+            else:
+                try: os.remove(dst)
+                except OSError: pass
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.move(src, dst)
+    shutil.rmtree(bak, ignore_errors=True)
+
+def _install_plugin(plugin_id: str, log: list, os_pref: str = 'windows', _chain=None):
+    """Download a plugin's newest release and install it straight into the server
+    (auto-loader) — no manual drag. Missing dependencies are installed first."""
+    plugin = next(p for p in PLUGINS_DEF if p['id'] == plugin_id)
+    if not os.path.exists(CS2_EXE):
+        raise RuntimeError('Create the CS2 server first (Create Server tab).')
+
+    _chain = _chain or set()
+    _chain.add(plugin_id)
+    for dep in plugin.get('depends_on', []):
+        if dep in _chain:
+            continue
+        dep_p = next((p for p in PLUGINS_DEF if p['id'] == dep), None)
+        if dep_p and not os.path.exists(dep_p['marker']):
+            log.append(f'— {plugin["name"]} needs {dep_p["name"]}; installing it first…')
+            _install_plugin(dep, log, os_pref, _chain)
+
+    log.append(f'Fetching latest release for {plugin["name"]}…')
+    release = _github_latest(plugin['github'], timeout=10,
+                             tag_prefix=plugin.get('github_tag_prefix'))
+    if not release:
+        raise RuntimeError('GitHub API unreachable or no release with assets.')
+    tag = release['tag_name']
+    asset = _pick_asset(plugin, release, os_pref)
+    if not asset:
+        raise RuntimeError(f'No suitable asset in release {tag}.')
+    log.append(f'Latest: {tag} → {asset["name"]} ({asset["size"] // 1024} KB)')
+
+    tmp_dir = os.path.join(tempfile.gettempdir(), 'cs2prak_plugins')
+    os.makedirs(tmp_dir, exist_ok=True)
+    tmp_zip = os.path.join(tmp_dir, asset['name'])
+    log.append('Downloading…')
+    _download(asset['browser_download_url'], tmp_zip)
+
+    log.append('Installing (extracting into the server)…')
+    _extract_plugin(plugin, tmp_zip, log)
+    try: os.remove(tmp_zip)
+    except OSError: pass
+
+    # per-plugin post-install wiring
+    if plugin_id == 'metamod':
+        patch_gameinfo()
+        log.append('[+] gameinfo.gi patched for Metamod.')
+    elif plugin_id == 'counterstrikesharp':
+        if 'with-runtime' not in asset['name'].lower():
+            _ensure_dotnet8(log)
+        if os.path.isdir(CSS_BASE):
+            ensure_css_basepath_link(log)
+    elif plugin_id == 'weaponpaints':
+        _patch_weaponpaints_config(log)
+
+    if plugin['version_src'] == 'tracker':
+        st = _load_plugin_state()
+        st[plugin_id] = tag.lstrip('v')
+        _save_plugin_state(st)
+
+    if os.path.exists(plugin['marker']):
+        log.append(f'[+] {plugin["name"]} {tag} installed and ready.')
+    else:
+        log.append(f'! {plugin["name"]} extracted, but its file was not where '
+                   f'expected — it may still load. ({plugin["marker"]})')
 
 def _install_server(log: list):
     """Download SteamCMD (if missing) then install CS2 dedicated server (visible window)."""
@@ -1074,18 +1361,7 @@ BINDS_CATALOG = [
 def _find_client_cfg_dir():
     """Locate the *client* CS2 cfg folder (the user's own install, where binds
     are exec'd from), scanning every Steam library.  Returns a path or None."""
-    import re
-    pf86 = os.environ.get('ProgramFiles(x86)', r'C:\Program Files (x86)')
-    steam = os.path.join(pf86, 'Steam')
-    libs = [steam]
-    try:
-        vdf = os.path.join(steam, 'steamapps', 'libraryfolders.vdf')
-        txt = open(vdf, encoding='utf-8', errors='ignore').read()
-        for m in re.findall(r'"path"\s*"([^"]+)"', txt):
-            libs.append(m.replace('\\\\', '\\'))
-    except OSError:
-        pass
-    for lib in libs:
+    for lib in _steam_libraries():
         cfg = os.path.join(lib, 'steamapps', 'common',
                            'Counter-Strike Global Offensive', 'game', 'csgo', 'cfg')
         if os.path.isdir(cfg):
@@ -1917,6 +2193,195 @@ def api_player_save(steamid):
     except Exception as e:
         return jsonify({'ok': False, 'message': str(e)}), 500
 
+# --- HLTV pro-loadout import -------------------------------------------------
+# HLTV embeds each pro player's verified loadout (the cs.money widget) directly
+# in the player page HTML under id="skins-loadout". We fetch that page server
+# side, scrape the skin list, and match each entry to the WeaponPaints
+# catalogue so the user can apply a pro's skins to their own loadout.
+
+_HLTV_WEAR_FLOAT = {'FN': 0.01, 'MW': 0.10, 'FT': 0.20, 'WW': 0.40, 'BS': 0.80}
+
+# Doppler/Gamma-Doppler share one paint_name but each phase is a distinct paint
+# id. HLTV tags the phase (R/S/BP/E/P1..P4); map that to the catalogue paint id.
+# paint_index -> phase label (authoritative, from the canonical paint kits;
+# covers the butterfly remap 617/618/619 and the Glock gun ids 1119-1123).
+_PHASE_BY_PAINT = {
+    415: 'Ruby', 416: 'Sapphire', 417: 'Black Pearl',
+    418: 'Phase 1', 419: 'Phase 2', 420: 'Phase 3', 421: 'Phase 4',
+    568: 'Emerald', 569: 'Phase 1', 570: 'Phase 2', 571: 'Phase 3', 572: 'Phase 4',
+    617: 'Black Pearl', 618: 'Phase 2', 619: 'Sapphire',
+    852: 'Phase 1', 853: 'Phase 2', 854: 'Phase 3', 855: 'Phase 4',
+    1119: 'Emerald', 1120: 'Phase 1', 1121: 'Phase 2', 1122: 'Phase 3', 1123: 'Phase 4',
+}
+# HLTV phase tag -> phase label
+_HLTV_PHASE_TAG = {
+    'R': 'Ruby', 'S': 'Sapphire', 'BP': 'Black Pearl',
+    'E': 'Emerald', 'EM': 'Emerald',
+    'P1': 'Phase 1', 'P2': 'Phase 2', 'P3': 'Phase 3', 'P4': 'Phase 4',
+}
+
+def _hltv_norm(s):
+    return re.sub(r'[^a-z0-9]', '', (s or '').lower().replace('★', ''))
+
+def _hltv_fetch(page_url):
+    # HLTV sits behind Cloudflare bot protection; a realistic full browser
+    # header set is required or it returns 403.
+    req = urllib.request.Request(page_url, headers={
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                      'AppleWebKit/537.36 (KHTML, like Gecko) '
+                      'Chrome/120 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,'
+                  'image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Upgrade-Insecure-Requests': '1',
+    })
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return r.read().decode('utf-8', 'ignore')
+
+def _hltv_parse(doc):
+    m = re.search(r'id="skins-loadout"', doc)
+    if not m:
+        return '', []
+    sec = doc[m.start(): m.start() + 80000]
+    nm = re.search(r'>\s*([^<>]+?)(?:\'|&#x27;|&apos;)s\s+inventory', sec)
+    player = html.unescape(nm.group(1).strip()) if nm else ''
+    items = []
+    for b in re.finditer(
+            r'<div class="skins-wrapper([^"]*)">\s*'
+            r'<a href="(/skins/[^"#]+)(#[^"]*)?" class="skin-top">(.*?)</a>',
+            sec, re.S):
+        wrapcls, href, inner = b.group(1), b.group(2), b.group(4)
+        parts = href.strip('/').split('/')          # skins / cat / wslug / sslug
+        if len(parts) < 4:
+            continue
+        title = re.search(r'skin-title">([^<]*)<', inner)
+        wear  = re.search(r'class="wear">([^<]*)<', inner)
+        phase = re.search(r'skin-phase[^>]*>([^<]*)<', inner)
+        img   = (re.search(r'class="skin-img" src="([^"]+)"', inner) or
+                 re.search(r'src="([^"]+)" class="skin-img"', inner))
+        rar   = re.search(r'rarity-([a-z0-9-]+)', wrapcls)
+        items.append({
+            'cat':    parts[1],
+            'wslug':  parts[2],
+            'title':  html.unescape(title.group(1).strip()) if title else '',
+            'wear':   (wear.group(1).strip() if wear else '').upper(),
+            'phase':  phase.group(1).strip() if phase else '',
+            'image':  img.group(1) if img else '',
+            'rarity': rar.group(1) if rar else '',
+        })
+    return player, items
+
+def _hltv_match(items):
+    _refresh_catalogues_if_changed()
+    if not SKINS_BY_WEAPON:
+        return None, None
+    sidx = {}
+    for wn, lst in SKINS_BY_WEAPON.items():
+        for s in lst:
+            pn = s.get('paint_name', '')
+            if '|' not in pn:
+                continue
+            wpart, spart = pn.split('|', 1)
+            sidx.setdefault((_hltv_norm(wpart), _hltv_norm(spart)), []).append((wn, s))
+    gidx = {}
+    for g in GLOVES_CAT:
+        pn = g.get('paint_name', '')
+        if '|' not in pn:
+            continue
+        wpart, spart = pn.split('|', 1)
+        gidx.setdefault((_hltv_norm(wpart), _hltv_norm(spart)), []).append(g)
+
+    def _pid(v):
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return 0
+
+    # The loadout has one slot per weapon (and a single knife / glove slot). When
+    # a pro shows several skins for the same slot, only the first is ticked by
+    # default; the rest come back unticked so the user can swap if they want.
+    matched, unmatched, seen, slot_seen = [], [], set(), set()
+
+    def _add(kind, defindex, paint_id, name, image, wear_f, phase_label, weapon_name=None):
+        dk = (kind, defindex, paint_id)
+        if dk in seen:
+            return
+        seen.add(dk)
+        slot = 'knife' if kind == 'knife' else ('glove' if kind == 'glove' else defindex)
+        default_sel = slot not in slot_seen
+        slot_seen.add(slot)
+        entry = {
+            'kind': kind, 'weapon_defindex': defindex, 'paint_id': paint_id,
+            'name': name, 'image': image, 'wear': it['wear'], 'wear_float': wear_f,
+            'phase': phase_label, 'default_sel': default_sel,
+            'rarity': it.get('rarity', ''),
+        }
+        if weapon_name:
+            entry['weapon_name'] = weapon_name
+        matched.append(entry)
+
+    for it in items:
+        key = (_hltv_norm(it['wslug']), _hltv_norm(it['title']))
+        wear_f = _HLTV_WEAR_FLOAT.get(it['wear'], 0.06)
+        if it['cat'] == 'gloves':
+            cands = gidx.get(key)
+            if cands:
+                g = cands[0]
+                _add('glove', g['weapon_defindex'], _pid(g.get('paint')),
+                     g['paint_name'].replace('★', '').strip(),
+                     it['image'] or g.get('image', ''), wear_f, '')
+                continue
+        else:
+            cands = sidx.get(key)
+            if cands:
+                wn, s = cands[0]
+                # Phase-aware pick for the doppler family: choose the candidate
+                # whose paint id matches the phase HLTV reported.
+                want = _HLTV_PHASE_TAG.get((it['phase'] or '').upper())
+                phase_label = ''
+                if want and len(cands) > 1:
+                    for wn2, s2 in cands:
+                        if _PHASE_BY_PAINT.get(_pid(s2.get('paint'))) == want:
+                            wn, s = wn2, s2
+                            phase_label = want
+                            break
+                if not phase_label:
+                    phase_label = _PHASE_BY_PAINT.get(_pid(s.get('paint')), '')
+                is_knife = wn.startswith('weapon_knife') or wn == 'weapon_bayonet'
+                _add('knife' if is_knife else 'skin', s['weapon_defindex'],
+                     _pid(s.get('paint')), s['paint_name'].replace('★', '').strip(),
+                     it['image'] or s.get('image', ''), wear_f, phase_label,
+                     weapon_name=wn)
+                continue
+        label = (it['wslug'].replace('-', ' ').title() + ' | ' + it['title']).strip(' |')
+        unmatched.append({'name': label, 'wear': it['wear'], 'image': it['image']})
+    return matched, unmatched
+
+@app.route('/api/hltv/skins', methods=['POST'])
+def api_hltv_skins():
+    data = request.get_json(silent=True) or {}
+    url = (data.get('url') or '').strip()
+    # Pin the host to hltv.org (no arbitrary server-side fetch) and require a
+    # player path so we only ever hit a real player page.
+    m = re.search(r'hltv\.org(/(?:[a-z]{2}/)?player/\d+[^\s"\'<>]*)', url, re.I)
+    if not m:
+        return jsonify({'ok': False, 'reason': 'badurl'})
+    page_url = 'https://www.hltv.org' + m.group(1)
+    try:
+        doc = _hltv_fetch(page_url)
+    except Exception:
+        return jsonify({'ok': False, 'reason': 'fetch'})
+    player, items = _hltv_parse(doc)
+    if not items:
+        return jsonify({'ok': False, 'reason': 'noskins'})
+    matched, unmatched = _hltv_match(items)
+    if matched is None:
+        return jsonify({'ok': False, 'reason': 'nocatalog'})
+    return jsonify({'ok': True, 'player': player, 'count': len(items),
+                    'matched': matched, 'unmatched': unmatched})
+
 @app.route('/api/plugins')
 def api_plugins():
     ps = _load_plugin_state()
@@ -1970,7 +2435,7 @@ def api_plugin_download(plugin_id):
 
     def _run():
         try:
-            _download_plugin_zip(plugin_id, job['log'], os_pref)
+            _install_plugin(plugin_id, job['log'], os_pref)
             job['exitCode'] = 0
         except Exception as e:
             job['log'].append(f'ERROR: {e}')
@@ -2028,6 +2493,29 @@ def api_server_install():
         global _server_install_running, _server_install_exit_code
         try:
             _install_server(_server_install_log)
+            _server_install_exit_code = 0
+        except Exception as e:
+            _server_install_log.append(f'ERROR: {e}')
+            _server_install_exit_code = -1
+        finally:
+            _server_install_running = False
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({'ok': True})
+
+@app.route('/api/server/use-existing', methods=['POST'])
+def api_server_use_existing():
+    global _server_install_running, _server_install_log, _server_install_exit_code
+    if _server_install_running:
+        return jsonify({'ok': False, 'message': 'Operation already in progress'})
+    _server_install_log = []
+    _server_install_exit_code = None
+    _server_install_running = True
+
+    def _run():
+        global _server_install_running, _server_install_exit_code
+        try:
+            build_overlay_from_existing(_server_install_log)
             _server_install_exit_code = 0
         except Exception as e:
             _server_install_log.append(f'ERROR: {e}')

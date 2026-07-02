@@ -274,6 +274,18 @@ loadSkinsBtn.addEventListener('click', async () => {
     window.openSkinPicker(val);
 });
 
+const importHltvBtn = document.getElementById('importHltvBtn');
+importHltvBtn?.addEventListener('click', async () => {
+    let val = steamIdInput.value.trim();
+    if (!val) { showToast('Enter your Steam ID or profile link first', 'error'); return; }
+    if (!validateSteamId(val)) {
+        const ok = await resolveSteamId();
+        if (!ok) return;
+        val = steamIdInput.value.trim();
+    }
+    window.openHltvImport(val);
+});
+
 let toastTimer = null;
 function showToast(msg, type = '') {
     clearTimeout(toastTimer);
@@ -352,6 +364,7 @@ const tabsTrack = document.getElementById('tabsTrack');
 let _activeTab  = 0;
 let _pluginsLoaded = false;
 let skinsReady = false, skinsDetail = { server: false, weaponpaints: false };
+let recBindsSeen = localStorage.getItem('cs2prak_recbinds_seen') === '1';
 
 const _demoDdToggle = document.getElementById('demoDdToggle');
 const _demoDdMenu   = document.getElementById('demoDdMenu');
@@ -380,6 +393,11 @@ _tabBtns.forEach(btn => {
         if (next === 2) checkSkinsReady();
         if (next === 8 && window.initStatistics) window.initStatistics();
         if (next === 9 && window.initAdvanced) window.initAdvanced();
+        if ((next === 3 || next === 4) && !recBindsSeen) {
+            recBindsSeen = true;
+            localStorage.setItem('cs2prak_recbinds_seen', '1');
+            showRecBinds();
+        }
     });
 });
 
@@ -412,13 +430,17 @@ function showSkinsLock() {
         if (_slBd) _slBd.classList.remove('open');
         if (!skinsDetail.server) {
             const t5 = document.querySelector('.tab-btn[data-tab="5"]'); if (t5) t5.click();
-            const dl = document.getElementById('dlServerBtn'); if (dl && !dl.disabled) dl.click();
+            const cb = document.getElementById('useExistingBtn'); if (cb && !cb.disabled) cb.click();
         } else {
             const t2 = document.querySelector('.tab-btn[data-tab="2"]'); if (t2) t2.click();
         }
     });
 })();
 checkSkinsReady();
+
+function showRecBinds() {
+    if (window.openPracticeBinds) window.openPracticeBinds();
+}
 
 function showBetaNotice(anchor) {
     if (document.getElementById('betaNotice')) return;
@@ -645,8 +667,7 @@ async function pollUpdateStatus() {
         }
         if (!data.running) {
             stopUpdPoll();
-            updateBtn.classList.remove('updating');
-            updateBtn.disabled = false;
+            if (updateBtn) { updateBtn.classList.remove('updating'); updateBtn.disabled = false; }
             if (data.exitCode === 0) {
                 updStatusLabel.textContent = 'DONE';
                 updStatusLabel.className   = 'upd-status-label done';
@@ -660,7 +681,7 @@ async function pollUpdateStatus() {
     } catch {  }
 }
 
-updateBtn.addEventListener('click', async () => {
+updateBtn && updateBtn.addEventListener('click', async () => {
     if (updateBtn.classList.contains('updating')) return;
     updLog.textContent = '';
     _updLogCursor = 0;
@@ -749,7 +770,7 @@ function _buildPluginCard(p) {
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
                     RELEASES
                 </a>
-                <button class="plugin-install-btn" id="installBtn_${p.id}">DOWNLOAD</button>
+                <button class="plugin-install-btn" id="installBtn_${p.id}">INSTALL</button>
             </div>
         </div>
         <div class="plugin-update-badge" id="updateBadge_${p.id}" style="display:none">
@@ -813,7 +834,7 @@ async function startPluginDownload(pluginId, pluginName) {
     updStatusLabel.textContent = 'RUNNING…';
     updStatusLabel.className   = 'upd-status-label';
     document.getElementById('updTitle').textContent =
-        `DOWNLOADING ${pluginName.toUpperCase()}`;
+        `INSTALLING ${pluginName.toUpperCase()}`;
     _updPollMode       = 'plugin';
     _pluginInstallId   = pluginId;
     _pluginInstallName = pluginName;
@@ -851,11 +872,11 @@ async function pollPluginStatus(pluginId) {
             if (data.exitCode === 0) {
                 updStatusLabel.textContent = 'DONE';
                 updStatusLabel.className   = 'upd-status-label done';
-                showToast(`${_pluginInstallName || pluginId} downloaded`, 'success');
+                showToast(`${_pluginInstallName || pluginId} installed`, 'success');
             } else {
                 updStatusLabel.textContent = 'FAILED';
                 updStatusLabel.className   = 'upd-status-label failed';
-                showToast('Download failed', 'error');
+                showToast('Install failed', 'error');
             }
         }
     } catch {  }
@@ -903,7 +924,7 @@ async function checkServerInstalled() {
     }
 }
 
-dlServerBtn.addEventListener('click', async () => {
+dlServerBtn && dlServerBtn.addEventListener('click', async () => {
     updLog.textContent = '';
     _updLogCursor = 0;
     updStatusLabel.textContent = 'RUNNING…';
@@ -929,6 +950,33 @@ dlServerBtn.addEventListener('click', async () => {
     }
 });
 
+const useExistingBtn = document.getElementById('useExistingBtn');
+useExistingBtn && useExistingBtn.addEventListener('click', async () => {
+    updLog.textContent = '';
+    _updLogCursor = 0;
+    updStatusLabel.textContent = 'RUNNING…';
+    updStatusLabel.className   = 'upd-status-label';
+    document.getElementById('updTitle').textContent = 'USE INSTALLED CS2';
+    _updPollMode = 'server-install';
+    openUpdateModal();
+    try {
+        const res  = await fetch('/api/server/use-existing', { method: 'POST' });
+        const data = await res.json();
+        if (!data.ok) {
+            updStatusLabel.textContent = 'ERROR';
+            updStatusLabel.className   = 'upd-status-label failed';
+            updLog.textContent = data.message || 'Could not start';
+            return;
+        }
+        useExistingBtn.disabled = true;
+        _updPollTimer = setInterval(pollServerInstallStatus, 1000);
+    } catch {
+        updStatusLabel.textContent = 'ERROR';
+        updStatusLabel.className   = 'upd-status-label failed';
+        updLog.textContent = 'Could not reach backend';
+    }
+});
+
 async function pollServerInstallStatus() {
     try {
         const res  = await fetch('/api/server/install/status');
@@ -941,11 +989,12 @@ async function pollServerInstallStatus() {
         }
         if (!data.running) {
             stopUpdPoll();
-            dlServerBtn.disabled = false;
+            if (dlServerBtn) dlServerBtn.disabled = false;
+            if (useExistingBtn) useExistingBtn.disabled = false;
             if (data.exitCode === 0) {
                 updStatusLabel.textContent = 'DONE';
                 updStatusLabel.className   = 'upd-status-label done';
-                showToast('Server installed successfully', 'success');
+                showToast('Server ready', 'success');
                 checkServerInstalled();
                 checkSkinsReady();
             } else {
@@ -1124,6 +1173,7 @@ pmBackdrop.addEventListener('click', e => { if (e.target === pmBackdrop) pmBackd
 (function () {
     const bd = document.getElementById('appUpdBackdrop');
     const txt = document.getElementById('appUpdText');
+    const notes = document.getElementById('appUpdNotes');
     const go = document.getElementById('appUpdGo');
     const later = document.getElementById('appUpdLater');
     let last = null, phase = 'idle', autoShown = false;
@@ -1135,6 +1185,11 @@ pmBackdrop.addEventListener('click', e => { if (e.target === pmBackdrop) pmBackd
 
     function render() {
         const s = last; if (!s) return;
+        if (notes) {
+            const has = !!(s.notes && s.notes.trim());
+            notes.hidden = !has;
+            if (has) notes.textContent = s.notes.trim();
+        }
         if (s.status === 'ready' || s.staged) {
             phase = 'ready';
             txt.textContent = t('update.ready');
