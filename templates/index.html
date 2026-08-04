@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CS2 Practice Server</title>
-    <link rel="stylesheet" href="/static/style.css?v=126">
+    <link rel="stylesheet" href="/static/style.css?v=128">
     <script>(function(){try{var t=localStorage.getItem('cs2prak_theme');if(t&&t!=='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -150,6 +150,7 @@
                                     <span class="os-lbl" id="osLabelLin" data-i18n="plugins.lin">LINUX</span>
                                 </div>
                                 <span class="plugins-hint" id="pluginsHint"></span>
+                                <button class="btn-plugin-autoinstall" id="autoInstallBtn" data-i18n="plugins.autoInstall">AUTO-INSTALL ALL</button>
                                 <div class="plugins-menu" id="pluginsMenu">
                                     <button class="btn-check-updates plugins-fn-btn" id="pluginsFnBtn" aria-expanded="false" data-i18n="plugins.function">FUNCTION</button>
                                     <div class="plugins-menu-list" id="pluginsMenuList">
@@ -379,6 +380,11 @@
                                     <span class="status-dot" id="dlStatusDot"></span>
                                     <span class="dl-status-text" id="dlStatusText" data-i18n="download.checking">Checking…</span>
                                 </div>
+                                <div class="server-upd-banner" id="serverUpdateBanner" style="display:none">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                                    <span class="server-upd-text" data-i18n="download.updated">CS2 has updated since the server was built — rebuild it so it keeps working.</span>
+                                    <button class="server-upd-rebuild" id="serverRebuildBtn" data-i18n="download.rebuild">REBUILD</button>
+                                </div>
                                 <p class="skins-desc" data-i18n="download.desc2">
                                     Builds a local practice server from your installed CS2 — it links the game
                                     content you already have (no download, your game stays untouched). Then
@@ -504,6 +510,16 @@
             <div class="au-btns">
                 <button class="au-btn" id="skinsLockClose" data-i18n="skinsLock.close">CLOSE</button>
                 <button class="au-btn au-primary" id="skinsLockGo" data-i18n="skinsLock.download">DOWNLOAD SERVER</button>
+            </div>
+        </div>
+    </div>
+    <div class="au-backdrop" id="rebuildBackdrop">
+        <div class="au-modal" role="dialog" aria-modal="true" aria-labelledby="rebuildTitle">
+            <div class="au-h" id="rebuildTitle" data-i18n="rebuild.title">REBUILD SERVER</div>
+            <div class="au-text" data-i18n="rebuild.text">CS2 has updated. First update the game in Steam to the latest version (launch CS2 once, or let Steam finish updating). When it's up to date, rebuild — this unbinds the old game links and re-links the server to the new files. Your installed plugins and configs are kept.</div>
+            <div class="au-btns">
+                <button class="au-btn" id="rebuildCancel" data-i18n="rebuild.cancel">CANCEL</button>
+                <button class="au-btn au-primary" id="rebuildGo" data-i18n="rebuild.go">REBUILD NOW</button>
             </div>
         </div>
     </div>
@@ -684,8 +700,8 @@
             </div>
         </div>
     </div>
-    <script src="/static/i18n.js?v=111"></script>
-    <script src="/static/script.js?v=116"></script>
+    <script src="/static/i18n.js?v=113"></script>
+    <script src="/static/script.js?v=118"></script>
     <script src="/static/skinpicker.js?v=103"></script>
     <script src="/static/binds.js?v=101"></script>
     <script src="/static/demo.js?v=105"></script>

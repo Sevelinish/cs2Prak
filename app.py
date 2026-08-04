@@ -50,7 +50,7 @@ def _safe_cache_key(key):
     (Werkzeug allows backslashes) can't escape the cache directory on Windows."""
     return bool(key) and re.fullmatch(r'[0-9a-f]{1,40}', key) is not None
 
-APP_VERSION = '1.0.8'
+APP_VERSION = '1.1.1'
 UPDATE_REPO = 'Sevelinish/cs2Prak'
 
 MAPS_DIR = os.path.join(_BASE, 'maps')
@@ -267,6 +267,71 @@ def _find_existing_cs2_game():
             return g
     return None
 
+_OVERLAY_STATE = os.path.join(SERVER_ROOT, 'overlay_state.json')
+
+def _cs2_retail_buildid():
+    """Steam's build id for the installed CS2 (bumps on every game update).
+    Read from the appmanifest of the library that actually holds CS2, with a
+    steam.inf fallback."""
+    g = _find_existing_cs2_game()
+    if not g:
+        return None
+    acf = os.path.normpath(os.path.join(g, '..', '..', '..', 'appmanifest_730.acf'))
+    try:
+        m = re.search(r'"buildid"\s*"(\d+)"',
+                      open(acf, encoding='utf-8', errors='ignore').read())
+        if m:
+            return m.group(1)
+    except OSError:
+        pass
+    try:
+        m = re.search(r'ClientVersion=(\d+)',
+                      open(os.path.join(g, 'csgo', 'steam.inf'),
+                           encoding='utf-8', errors='ignore').read())
+        if m:
+            return m.group(1)
+    except OSError:
+        pass
+    return None
+
+def _save_overlay_buildid():
+    """Record which CS2 build the overlay was assembled against, so we can later
+    tell the user their game updated and the server needs rebuilding."""
+    try:
+        os.makedirs(SERVER_ROOT, exist_ok=True)
+        json.dump({'cs2_buildid': _cs2_retail_buildid()}, open(_OVERLAY_STATE, 'w'))
+    except Exception:
+        pass
+
+def _overlay_buildid():
+    try:
+        return json.load(open(_OVERLAY_STATE)).get('cs2_buildid')
+    except Exception:
+        return None
+
+def _overlay_stale():
+    """True if the overlay's linked game files no longer match the installed CS2.
+    When the game updates, Steam replaces the VPKs, so our hardlinks point at the
+    old (now-diverged) files. Detected by file identity (os.path.samefile), so it
+    needs NO recorded baseline — it works for servers built by older versions too."""
+    g = _find_existing_cs2_game()
+    if not g:
+        return False
+    r = os.path.join(g, 'csgo')
+    o = os.path.join(CS2_GAME, 'csgo')
+    for name in ('steam.inf', 'pak01_dir.vpk'):
+        rt, ov = os.path.join(r, name), os.path.join(o, name)
+        if not os.path.isfile(rt):
+            continue
+        if not os.path.isfile(ov):
+            return True
+        try:
+            if not os.path.samefile(ov, rt):
+                return True
+        except OSError:
+            return True
+    return False
+
 def _overlay_is_content(name):
     n = name.lower()
     if n == 'gameinfo.gi' or n.endswith('.dem') or n.endswith('.dat'):
@@ -349,8 +414,73 @@ def build_overlay_from_existing(log: list):
         f.write(txt.encode('utf-8'))
     os.makedirs(os.path.join(scsgo, 'addons'), exist_ok=True)
     say('[+] Wrote our Metamod-patched gameinfo.gi into the overlay (your game stays vanilla).')
+    _save_overlay_buildid()
     say(f'[+] Overlay ready at {dst}')
     say('Done — now install Metamod / CounterStrikeSharp / WeaponPaints in the Plugins tab, then launch.')
+
+def _is_junction(p):
+    try:
+        return os.path.isdir(p) and \
+            os.path.normcase(os.path.realpath(p)) != os.path.normcase(os.path.abspath(p))
+    except OSError:
+        return False
+
+def _unbind_overlay(log: list):
+    """Remove the overlay's links to the retail game — directory junctions and
+    hardlinked VPKs — so they can be re-created against the updated install.
+    Keeps what WE own: installed plugins (addons), configs (cfg), our gameinfo.gi."""
+    dst = CS2_GAME
+    scsgo = os.path.join(dst, 'csgo')
+    keep = {'addons', 'cfg', 'gameinfo.gi'}
+    removed = 0
+
+    def rm(p):
+        nonlocal removed
+        try:
+            if _is_junction(p):
+                os.rmdir(p)
+            elif os.path.islink(p) or os.path.isfile(p):
+                os.remove(p)
+            else:
+                return
+            removed += 1
+        except OSError as e:
+            log.append(f'  ! could not unbind {os.path.basename(p)} ({e})')
+
+    if os.path.isdir(scsgo):
+        for e in os.scandir(scsgo):
+            if e.name.lower() not in keep:
+                rm(e.path)
+    if os.path.isdir(dst):
+        for e in os.scandir(dst):
+            if e.name.lower() != 'csgo':
+                rm(e.path)
+    log.append(f'[+] Unbound {removed} old links to the game '
+               f'(kept your plugins, configs and gameinfo).')
+
+def rebuild_overlay(log: list):
+    """After a CS2 update the overlay's hardlinks point at the OLD game files, so
+    the server fails to load VPKs. Unbind those links and re-bind them against the
+    freshly-updated install (plugins/configs are preserved)."""
+    if not os.path.exists(CS2_EXE):
+        raise RuntimeError('No server to rebuild yet — create it first.')
+    old, new = _overlay_buildid(), _cs2_retail_buildid()
+    if old and new and old == new:
+        log.append(f'! Heads up: CS2 build is still {new} — update the game in '
+                   f'Steam first for this to help. Rebuilding anyway.')
+    log.append('Unbinding old links to the game…')
+    _unbind_overlay(log)
+    log.append('Re-binding against your current CS2…')
+    build_overlay_from_existing(log)
+    for pid in ('metamod', 'counterstrikesharp'):
+        p = next((x for x in PLUGINS_DEF if x['id'] == pid), None)
+        if p and os.path.exists(p['marker']):
+            log.append(f'Updating {p["name"]} to match the new CS2…')
+            try:
+                _install_plugin(pid, log)
+            except Exception as e:
+                log.append(f'! Could not auto-update {p["name"]} ({e}). '
+                           f'Re-install it from the Plugins tab.')
 
 def ensure_css_basepath_link(log: list | None = None):
     """Make CounterStrikeSharp find itself on current CS2.
@@ -625,16 +755,27 @@ def _is_outdated(local: str, latest: str) -> bool:
     return tl[-n:] < tr[-n:]
 
 def _github_latest(repo: str, timeout: int = 8, tag_prefix: str = None) -> dict | None:
-    """Newest release that actually carries downloadable assets. Deliberately does
-    NOT use /releases/latest — that endpoint hides prereleases, so projects like
-    CounterStrikeSharp (which sometimes flag the newest build as a prerelease)
-    would serve an older stable release. We list releases and pick the highest
-    version (tie-break: publish date), honouring an optional tag prefix."""
-    url = f'https://api.github.com/repos/{repo}/releases?per_page=30'
-    req = urllib.request.Request(url, headers={'User-Agent': 'cs2prak/1.0'})
-    try:
+    """Newest release that carries downloadable assets.
+
+    Prefers GitHub's canonical `/releases/latest` (most-recent published,
+    non-prerelease) — it is reliable even when the `/releases` LIST is oddly
+    ordered (GitHub sorts that by *created_at*, so a freshly-published tag can be
+    missing from the top of the list). Falls back to listing only when we need a
+    tag-prefix filter (Metamod) or the repo publishes nothing but prereleases."""
+    def _get(url):
+        req = urllib.request.Request(url, headers={'User-Agent': 'cs2prak/1.0'})
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            rels = json.loads(r.read().decode())
+            return json.loads(r.read().decode())
+
+    if not tag_prefix:
+        try:
+            rel = _get(f'https://api.github.com/repos/{repo}/releases/latest')
+            if rel and rel.get('assets'):
+                return rel
+        except Exception:
+            pass
+    try:
+        rels = _get(f'https://api.github.com/repos/{repo}/releases?per_page=30')
     except Exception:
         return None
     if not isinstance(rels, list):
@@ -727,7 +868,7 @@ def check_update():
             return
         tag = (rel.get('tag_name') or '').strip()
         _update_state['latest'] = tag
-        if not _is_newer(tag, APP_VERSION):
+        if _ver_tuple(tag) < _ver_tuple(APP_VERSION):
             _update_state['status'] = 'up-to-date'
             return
         assets = {a.get('name'): a for a in rel.get('assets', [])}
@@ -757,10 +898,13 @@ def check_update():
             _update_state.update(status='up-to-date', available=False)
             return
         _pending = {'tag': tag, 'changed': changed, 'install': install}
+        # Same version but different files means the release was re-uploaded;
+        # naming the tag in that message would just read as "update to what I have".
+        same = _ver_tuple(tag) == _ver_tuple(APP_VERSION)
         _update_state.update(available=True, staged=False, status='available',
                              files=[c[0] for c in changed], size=size,
                              notes=(rel.get('body') or '').strip(),
-                             message=f'Update {tag} available')
+                             message='Update available' if same else f'Update {tag} available')
     except Exception as e:
         _update_state.update(status='error', message=str(e))
 
@@ -1086,6 +1230,27 @@ def _install_plugin(plugin_id: str, log: list, os_pref: str = 'windows', _chain=
     else:
         log.append(f'! {plugin["name"]} extracted, but its file was not where '
                    f'expected — it may still load. ({plugin["marker"]})')
+
+def _install_all_plugins(log: list, os_pref: str):
+    """One-click: install every plugin that isn't already present, in dependency
+    order (PLUGINS_DEF is ordered deps-first). Failures are logged but don't stop
+    the rest."""
+    if not os.path.exists(CS2_EXE):
+        raise RuntimeError('Create the CS2 server first (Create Server tab).')
+    total = len(PLUGINS_DEF)
+    done = 0
+    for i, p in enumerate(PLUGINS_DEF, 1):
+        if os.path.exists(p['marker']):
+            log.append(f'[=] ({i}/{total}) {p["name"]} — already installed, skipping.')
+            done += 1
+            continue
+        log.append(f'=== ({i}/{total}) {p["name"]} ===')
+        try:
+            _install_plugin(p['id'], log, os_pref)
+            done += 1
+        except Exception as e:
+            log.append(f'! {p["name"]} failed: {e}')
+    log.append(f'[+] Auto-install finished — {done}/{total} plugins ready.')
 
 def _install_server(log: list):
     """Download SteamCMD (if missing) then install CS2 dedicated server (visible window)."""
@@ -2680,6 +2845,47 @@ def _scan_plugin_dir(base: str, enabled: bool, known: dict) -> list:
         })
     return out
 
+@app.route('/api/plugins/install-all', methods=['POST'])
+def api_plugins_install_all():
+    if not os.path.exists(CS2_EXE):
+        return jsonify({'ok': False, 'message': 'Create the server first.'}), 400
+    if _plugin_jobs.get('__all__', {}).get('running'):
+        return jsonify({'ok': False, 'message': 'Auto-install already running'})
+
+    os_pref = request.args.get('os', 'windows').lower()
+    if os_pref not in ('windows', 'linux'):
+        os_pref = 'windows'
+
+    job = {'running': True, 'log': [], 'exitCode': None}
+    _plugin_jobs['__all__'] = job
+
+    def _run():
+        try:
+            _install_all_plugins(job['log'], os_pref)
+            job['exitCode'] = 0
+        except Exception as e:
+            job['log'].append(f'ERROR: {e}')
+            job['exitCode'] = -1
+        finally:
+            job['running'] = False
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({'ok': True})
+
+@app.route('/api/server/update-check')
+def api_server_update_check():
+    """Has CS2 updated since the overlay server was built? A game update replaces
+    the retail VPKs, so the overlay's hardlinks go stale and the server must be
+    rebuilt. Compare the current CS2 build id to the one recorded at build time."""
+    installed = os.path.exists(CS2_EXE)
+    outdated = bool(installed and _overlay_stale())
+    return jsonify({
+        'installed': installed,
+        'outdated':  outdated,
+        'current':   _cs2_retail_buildid(),
+        'built':     _overlay_buildid(),
+    })
+
 @app.route('/api/plugins/installed')
 def api_plugins_installed():
     known = _known_plugin_folders()
@@ -2712,6 +2918,31 @@ def api_plugins_toggle(folder):
         return jsonify({'ok': True})
     except Exception as e:
         return jsonify({'ok': False, 'message': f'Could not move plugin (is the server running?): {e}'}), 500
+
+@app.route('/api/server/rebuild', methods=['POST'])
+def api_server_rebuild():
+    global _server_install_running, _server_install_log, _server_install_exit_code
+    if _server_install_running:
+        return jsonify({'ok': False, 'message': 'Operation already in progress'})
+    if not os.path.exists(CS2_EXE):
+        return jsonify({'ok': False, 'message': 'Create the server first.'}), 400
+    _server_install_log = []
+    _server_install_exit_code = None
+    _server_install_running = True
+
+    def _run():
+        global _server_install_running, _server_install_exit_code
+        try:
+            rebuild_overlay(_server_install_log)
+            _server_install_exit_code = 0
+        except Exception as e:
+            _server_install_log.append(f'ERROR: {e}')
+            _server_install_exit_code = -1
+        finally:
+            _server_install_running = False
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({'ok': True})
 
 def open_browser(port):
     time.sleep(1)

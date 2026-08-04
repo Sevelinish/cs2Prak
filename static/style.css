@@ -2588,3 +2588,41 @@ body::before { content: none; }
 }
 .hl-apply-btn:hover { filter: brightness(1.08); }
 .hl-apply-btn:disabled { opacity: 0.5; cursor: default; }
+
+/* ===== Server "CS2 updated — rebuild" banner (Create Server tab) ===== */
+.server-upd-banner {
+    display: flex; align-items: center; gap: 10px;
+    margin: 12px 0 4px;
+    padding: 11px 14px;
+    background: var(--accent-wash);
+    border: 1px solid var(--accent-dim);
+    color: var(--text-primary);
+}
+.server-upd-banner > svg { color: var(--accent); flex-shrink: 0; }
+.server-upd-text {
+    flex: 1; font-size: 12.5px; line-height: 1.35; color: var(--text-secondary);
+}
+.server-upd-rebuild {
+    flex-shrink: 0;
+    background: var(--accent); border: 1px solid var(--accent);
+    color: var(--accent-deep);
+    font-family: var(--font-head); font-size: 12px; font-weight: 700; letter-spacing: 2px;
+    padding: 7px 16px; cursor: pointer;
+    transition: filter var(--t);
+}
+.server-upd-rebuild:hover { filter: brightness(1.08); }
+
+/* ===== Plugins: one-click Auto-Install button ===== */
+.btn-plugin-autoinstall {
+    background: var(--accent);
+    border: 1px solid var(--accent);
+    color: var(--accent-deep);
+    font-family: var(--font-head); font-size: 12px; font-weight: 700;
+    letter-spacing: 1.5px; text-transform: uppercase;
+    padding: 8px 16px; cursor: pointer;
+    transition: filter var(--t);
+    white-space: nowrap;
+}
+.btn-plugin-autoinstall:hover { filter: brightness(1.08); }
+.btn-plugin-autoinstall:active { transform: translateY(1px); }
+.btn-plugin-autoinstall:disabled { opacity: 0.5; cursor: default; }

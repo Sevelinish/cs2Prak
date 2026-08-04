@@ -857,6 +857,35 @@ async function startPluginDownload(pluginId, pluginName) {
     }
 }
 
+async function startPluginInstallAll() {
+    updLog.textContent = '';
+    _updLogCursor = 0;
+    updStatusLabel.textContent = 'RUNNING…';
+    updStatusLabel.className   = 'upd-status-label';
+    document.getElementById('updTitle').textContent = 'AUTO-INSTALL PLUGINS';
+    _updPollMode       = 'plugin';
+    _pluginInstallId   = '__all__';
+    _pluginInstallName = 'All plugins';
+    openUpdateModal();
+    try {
+        const res  = await fetch(`/api/plugins/install-all?os=${_selectedOS}`, { method: 'POST' });
+        const data = await res.json();
+        if (!data.ok) {
+            updStatusLabel.textContent = 'ERROR';
+            updStatusLabel.className   = 'upd-status-label failed';
+            updLog.textContent = data.message || 'Could not start auto-install';
+            return;
+        }
+        _updPollTimer = setInterval(() => pollPluginStatus('__all__'), 1000);
+    } catch {
+        updStatusLabel.textContent = 'ERROR';
+        updStatusLabel.className   = 'upd-status-label failed';
+        updLog.textContent = 'Could not reach backend';
+    }
+}
+const autoInstallBtn = document.getElementById('autoInstallBtn');
+autoInstallBtn && autoInstallBtn.addEventListener('click', startPluginInstallAll);
+
 async function pollPluginStatus(pluginId) {
     try {
         const res  = await fetch(`/api/plugins/${pluginId}/download/status`);
@@ -869,6 +898,7 @@ async function pollPluginStatus(pluginId) {
         }
         if (!data.running) {
             stopUpdPoll();
+            loadPlugins();
             if (data.exitCode === 0) {
                 updStatusLabel.textContent = 'DONE';
                 updStatusLabel.className   = 'upd-status-label done';
@@ -922,7 +952,56 @@ async function checkServerInstalled() {
     } catch {
         dlStatusText.textContent = 'Could not check status';
     }
+    checkServerUpdate();
 }
+
+async function checkServerUpdate() {
+    const banner = document.getElementById('serverUpdateBanner');
+    if (!banner) return;
+    try {
+        const d = await (await fetch('/api/server/update-check')).json();
+        banner.style.display = d.outdated ? 'flex' : 'none';
+    } catch {
+        banner.style.display = 'none';
+    }
+}
+
+const serverRebuildBtn = document.getElementById('serverRebuildBtn');
+const rebuildBackdrop  = document.getElementById('rebuildBackdrop');
+serverRebuildBtn && serverRebuildBtn.addEventListener('click', () => {
+    if (rebuildBackdrop) rebuildBackdrop.classList.add('open');
+});
+const rebuildCancel = document.getElementById('rebuildCancel');
+rebuildCancel && rebuildCancel.addEventListener('click', () => rebuildBackdrop.classList.remove('open'));
+rebuildBackdrop && rebuildBackdrop.addEventListener('click', e => {
+    if (e.target === rebuildBackdrop) rebuildBackdrop.classList.remove('open');
+});
+const rebuildGo = document.getElementById('rebuildGo');
+rebuildGo && rebuildGo.addEventListener('click', async () => {
+    rebuildBackdrop.classList.remove('open');
+    updLog.textContent = '';
+    _updLogCursor = 0;
+    updStatusLabel.textContent = 'RUNNING…';
+    updStatusLabel.className   = 'upd-status-label';
+    document.getElementById('updTitle').textContent = 'REBUILD SERVER';
+    _updPollMode = 'server-install';
+    openUpdateModal();
+    try {
+        const res  = await fetch('/api/server/rebuild', { method: 'POST' });
+        const data = await res.json();
+        if (!data.ok) {
+            updStatusLabel.textContent = 'ERROR';
+            updStatusLabel.className   = 'upd-status-label failed';
+            updLog.textContent = data.message || 'Could not start rebuild';
+            return;
+        }
+        _updPollTimer = setInterval(pollServerInstallStatus, 1000);
+    } catch {
+        updStatusLabel.textContent = 'ERROR';
+        updStatusLabel.className   = 'upd-status-label failed';
+        updLog.textContent = 'Could not reach backend';
+    }
+});
 
 dlServerBtn && dlServerBtn.addEventListener('click', async () => {
     updLog.textContent = '';
