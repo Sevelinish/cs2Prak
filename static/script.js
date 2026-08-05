@@ -375,7 +375,12 @@ _tabBtns.forEach(btn => {
         const next = parseInt(btn.dataset.tab);
         if (isNaN(next)) return;
         if (_demoDdMenu) _demoDdMenu.hidden = true;
-        if (next === 1 && !skinsReady) { showSkinsLock(); return; }   
+        if (next === 1 && !skinsReady) { showSkinsLock(); return; }
+        // Analytics (demo viewer + statistics) resolves player profiles through
+        // FACEIT, so it stays locked until a key is stored.
+        if ((next === 4 || next === 8 || next === 9) && !faceitReady) {
+            showFaceitLock(next); return;
+        }
         if (next === _activeTab) { syncDemoDd(next); return; }
         _activeTab = next;
         tabsTrack.style.transform = `translateX(-${(100 / 10) * next}%)`;
@@ -417,6 +422,70 @@ function checkSkinsReady() {
     }).catch(() => {});
 }
 const _slBd = document.getElementById('skinsLockBackdrop');
+let faceitReady = false;
+let _flockWanted = 4;
+const _flBd = document.getElementById('faceitLockBackdrop');
+
+function refreshFaceitReady() {
+    return fetch('/api/faceit/key').then(r => r.json())
+        .then(j => (faceitReady = !!(j && j.set)))
+        .catch(() => faceitReady);
+}
+refreshFaceitReady();
+
+function showFaceitLock(wanted) {
+    _flockWanted = wanted || 4;
+    const msg = document.getElementById('flockMsg');
+    if (msg) msg.textContent = '';
+    if (_flBd) _flBd.classList.add('open');
+    const inp = document.getElementById('flockInput');
+    if (inp) setTimeout(() => inp.focus(), 40);
+}
+
+(function () {
+    const close = document.getElementById('flockClose');
+    const save = document.getElementById('flockSave');
+    const inp = document.getElementById('flockInput');
+    const msg = document.getElementById('flockMsg');
+    if (!save) return;
+
+    const note = (text, bad) => {
+        if (!msg) return;
+        msg.textContent = text || '';
+        msg.classList.toggle('bad', !!bad);
+    };
+
+    const submit = () => {
+        const key = (inp.value || '').trim();
+        if (!key) { note(t('fk.needKey'), true); return; }
+        save.disabled = true; note(t('fk.checkingMsg'));
+        fetch('/api/faceit/key', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key }),
+        }).then(r => r.json()).then(j => {
+            if (j && j.ok) {
+                faceitReady = true;
+                inp.value = '';
+                if (_flBd) _flBd.classList.remove('open');
+                const btn = document.querySelector('.tab-btn[data-tab="' + _flockWanted + '"]');
+                if (btn) btn.click();
+            } else {
+                note((j && j.message) || t('fk.rejected'), true);
+            }
+        }).catch(() => note(t('fk.noBackend'), true))
+          .finally(() => { save.disabled = false; });
+    };
+
+    save.addEventListener('click', submit);
+    inp && inp.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+    close && close.addEventListener('click', () => _flBd && _flBd.classList.remove('open'));
+    _flBd && _flBd.addEventListener('click', e => {
+        if (e.target === _flBd) _flBd.classList.remove('open');
+    });
+    // the key can also be set from the card inside the demo tab
+    document.addEventListener('faceitkey', e => { faceitReady = !!(e.detail && e.detail.set); });
+})();
+
 function showSkinsLock() {
     const go = document.getElementById('skinsLockGo');
     if (go) go.textContent = skinsDetail.server ? t('skinsLock.plugins') : t('skinsLock.download');

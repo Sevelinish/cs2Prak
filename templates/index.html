@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CS2 Practice Server</title>
-    <link rel="stylesheet" href="/static/style.css?v=128">
+    <link rel="stylesheet" href="/static/style.css?v=133">
     <script>(function(){try{var t=localStorage.getItem('cs2prak_theme');if(t&&t!=='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -250,6 +250,13 @@
                                     <div class="demo-list" id="demoList"></div>
                                 </section>
                             </div>
+                            <div class="dvload" id="dvLoading" hidden>
+                                <div class="dvload-box">
+                                    <div class="dvload-bars"><i></i><i></i><i></i><i></i></div>
+                                    <div class="dvload-title" data-i18n="dv.loading">Loading demo…</div>
+                                    <div class="dvload-sub" data-i18n="dv.loadingSub">Parsing frames, radar and player profiles</div>
+                                </div>
+                            </div>
                             <div class="demo-viewer" id="demoViewer" style="display:none">
                                 <div class="dv-top">
                                     <button class="dv-back" id="dvBack" title="Back to demo list">
@@ -271,6 +278,10 @@
                                     <span class="dv-clock" id="dvClock">0:00</span>
                                     <div class="dv-dock">
                                         <button class="dv-launch" id="dvLaunch" style="display:none">LAUNCH SERVER</button>
+                                        <button class="dv-impact" id="dvImpact" data-i18n="impact.btnTitle" data-i18n-attr="title" title="Positional analysis per side">
+                                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="square"><path d="M3 20V9M9 20V4M15 20v-7M21 20v-11"/></svg>
+                                            <span data-i18n="impact.btn">IMPACT</span><b>1.0</b>
+                                        </button>
                                         <button class="dv-floor" id="dvFloor" style="display:none">UPPER</button>
                                         <div class="dv-settings-wrap">
                                             <button class="dv-gear" id="dvGear" title="Display settings" aria-haspopup="true" aria-expanded="false">
@@ -430,6 +441,31 @@
                                     <button class="dv-seg-btn" data-lang="ru" role="radio" aria-checked="false">RU</button>
                                 </div>
                             </div>
+                            <div class="set-card set-card-fk">
+                                <div class="set-card-head">
+                                    <span class="set-card-title" data-i18n="fk.title">FACEIT API KEY</span>
+                                    <span class="set-card-sub" data-i18n="fk.desc"></span>
+                                </div>
+                                <div class="set-card-controls fk" id="faceitKeyCard">
+                                    <div class="fk-head">
+                                        <span class="fk-state" id="fkState" data-i18n="fk.checking">CHECKING…</span>
+                                    </div>
+                                    <div class="fk-row">
+                                        <input class="fk-input" id="fkInput" type="password" spellcheck="false"
+                                               autocomplete="off" data-i18n="fk.ph" data-i18n-attr="placeholder"
+                                               placeholder="Paste your server-side API key">
+                                        <button class="fk-btn" id="fkSave" data-i18n="fk.save">SAVE</button>
+                                        <button class="fk-btn fk-btn-ghost" id="fkClear" data-i18n="fk.clear">CLEAR</button>
+                                    </div>
+                                    <div class="fk-foot">
+                                        <a class="fk-link" id="fkLink" href="https://developers.faceit.com/apps" target="_blank" rel="noopener noreferrer">
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="square"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                                            <span data-i18n="fk.link">How to create a key</span>
+                                        </a>
+                                        <span class="fk-msg" id="fkMsg"></span>
+                                    </div>
+                                </div>
+                            </div>
                             <div class="set-card">
                                 <div class="set-card-head">
                                     <span class="set-card-title" data-i18n="settings.pencil">Demo pencil</span>
@@ -510,6 +546,28 @@
             <div class="au-btns">
                 <button class="au-btn" id="skinsLockClose" data-i18n="skinsLock.close">CLOSE</button>
                 <button class="au-btn au-primary" id="skinsLockGo" data-i18n="skinsLock.download">DOWNLOAD SERVER</button>
+            </div>
+        </div>
+    </div>
+    <div class="au-backdrop" id="faceitLockBackdrop">
+        <div class="au-modal" role="dialog" aria-modal="true" aria-labelledby="flockTitle">
+            <div class="au-h" id="flockTitle" data-i18n="flock.title">ANALYTICS LOCKED</div>
+            <div class="au-text" data-i18n="flock.text"></div>
+            <div class="fk-row flock-row">
+                <input class="fk-input" id="flockInput" type="password" spellcheck="false"
+                       autocomplete="off" data-i18n="fk.ph" data-i18n-attr="placeholder"
+                       placeholder="Paste your server-side API key">
+            </div>
+            <div class="fk-foot">
+                <a class="fk-link" href="https://developers.faceit.com/apps" target="_blank" rel="noopener noreferrer">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="square"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                    <span data-i18n="fk.link">How to create a key</span>
+                </a>
+                <span class="fk-msg" id="flockMsg"></span>
+            </div>
+            <div class="au-btns">
+                <button class="au-btn" id="flockClose" data-i18n="flock.close">CLOSE</button>
+                <button class="au-btn au-primary" id="flockSave" data-i18n="flock.save">UNLOCK</button>
             </div>
         </div>
     </div>
@@ -700,13 +758,40 @@
             </div>
         </div>
     </div>
-    <script src="/static/i18n.js?v=113"></script>
-    <script src="/static/script.js?v=118"></script>
+    <script src="/static/i18n.js?v=115"></script>
+    <script src="/static/script.js?v=115"></script>
     <script src="/static/skinpicker.js?v=103"></script>
     <script src="/static/binds.js?v=101"></script>
-    <script src="/static/demo.js?v=105"></script>
-    <script src="/static/statistics.js?v=107"></script>
-    <script src="/static/advanced.js?v=6"></script>
+    <!-- Kept outside .tabs-track: that element is transformed, which would make it
+         the containing block for this panel's position:fixed and break the layout. -->
+    <div class="imp" id="impPanel" hidden>
+        <div class="imp-head">
+            <span class="imp-title">IMPACT<b>1.0</b></span>
+            <span class="imp-sub" id="impSub"></span>
+            <div class="imp-seg" id="impSide" role="radiogroup" aria-label="Side">
+                <button class="imp-seg-btn on" data-side="1" role="radio" aria-checked="true">CT</button>
+                <button class="imp-seg-btn" data-side="0" role="radio" aria-checked="false">T</button>
+            </div>
+            <button class="imp-x" id="impClose" data-i18n="impact.close" data-i18n-attr="title" title="Close (Esc)">✕</button>
+        </div>
+        <div class="imp-body">
+            <div class="imp-roster" id="impRoster"></div>
+            <div class="imp-stage">
+                <canvas id="impCanvas" width="560" height="560"></canvas>
+                <div class="imp-scale">
+                    <span class="imp-scale-lab" data-i18n="impact.timeSpent">TIME SPENT</span>
+                    <i class="imp-scale-bar" id="impScaleBar"></i>
+                    <span class="imp-scale-lab" data-i18n="impact.high">HIGH</span>
+                </div>
+            </div>
+            <div class="imp-profile" id="impProfile"></div>
+        </div>
+    </div>
+    <script src="/static/weapons.js?v=116"></script>
+    <script src="/static/impact.js?v=116"></script>
+    <script src="/static/demo.js?v=116"></script>
+    <script src="/static/statistics.js?v=115"></script>
+    <script src="/static/advanced.js?v=115"></script>
     <script src="/static/tutorial.js?v=100"></script>
 </body>
 </html>

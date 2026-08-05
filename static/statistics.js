@@ -330,7 +330,9 @@
         return '<div class="stats-wk">' + arr.map(function (w) {
             var pctw = Math.round((w[1] / max) * 100);
             return '<div class="stats-wk-row">' +
-                '<span class="stats-wk-name">' + esc(w[0]) + '</span>' +
+                '<span class="stats-wk-name">' +
+                    (window.WeaponIcons ? window.WeaponIcons.html(w[0], 'wic-lg') : esc(w[0])) +
+                '</span>' +
                 '<span class="stats-wk-track"><i style="width:' + pctw + '%"></i></span>' +
                 '<span class="stats-wk-v">' + w[1] + '</span></div>';
         }).join('') + '</div>';

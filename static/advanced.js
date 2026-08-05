@@ -171,7 +171,9 @@
                 '<span class="adv-duel-c rt">R' + esc(d.round) + '</span>' +
                 '<span class="adv-duel-c res">' + (d.won ? 'WON' : 'LOST') + '</span>' +
                 '<span class="adv-duel-c opp">' + esc(d.opp) + '</span>' +
-                '<span class="adv-duel-c wpn">' + esc(d.weapon || '') + '</span>' +
+                '<span class="adv-duel-c wpn">' +
+                    (window.WeaponIcons ? window.WeaponIcons.html(d.weapon || '') : esc(d.weapon || '')) +
+                '</span>' +
                 '<span class="adv-duel-c num">' + (d.react != null ? (d.react + 'ms') : '—') + '</span>' +
                 '<span class="adv-duel-c num">' + (d.cross != null ? (d.cross + '°') : '—') + '</span>' +
                 '<span class="adv-duel-c num">' + (d.firstBullet != null ? (d.firstBullet ? '1B✓' : '1B✗') : '') + '</span>' +
@@ -212,7 +214,7 @@
                 ' vs ' + esc(d.opp) + '</div>' +
             '<dl class="adv-radar-dl">' +
                 kv('Round', 'R' + esc(d.round) + ' · ' + esc(d.time) + 's') +
-                kv('Weapon', esc(d.weapon || '—')) +
+                kv('Weapon', window.WeaponIcons ? window.WeaponIcons.html(d.weapon || '—') : esc(d.weapon || '—')) +
                 kv('Your HP', d.hp != null ? esc(d.hp) : '—') +
                 kv('Distance', d.dist != null ? (esc(d.dist) + ' m') : '—') +
                 kv('Reaction', d.react != null ? (esc(d.react) + ' ms') : '—') +

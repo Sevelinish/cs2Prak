@@ -50,7 +50,7 @@ def _safe_cache_key(key):
     (Werkzeug allows backslashes) can't escape the cache directory on Windows."""
     return bool(key) and re.fullmatch(r'[0-9a-f]{1,40}', key) is not None
 
-APP_VERSION = '1.1.1'
+APP_VERSION = '1.1.2'
 UPDATE_REPO = 'Sevelinish/cs2Prak'
 
 MAPS_DIR = os.path.join(_BASE, 'maps')
@@ -1912,35 +1912,46 @@ def _avatar_cache():
     except Exception:
         return {}
 
+def _avatar_entry(v):
+    """Cache entries used to be a bare avatar URL; they are now a small profile
+    dict. Normalise so old caches keep working."""
+    if isinstance(v, dict):
+        return v
+    return {'url': v or '', 'nick': '', 'lvl': 0, 'elo': 0}
+
 @app.route('/api/faceit/avatar')
 def faceit_avatar():
-    """steamid64 -> FACEIT avatar URL. {ok:false} (client shows an initials fallback)
-    when no FACEIT key is set or the player isn't on FACEIT. Uses the same key the app
-    already stores for FACEIT match download (faceit_key.txt)."""
+    """steamid64 -> FACEIT profile (avatar, nickname, skill level, elo).
+    {ok:false} (client shows an initials fallback) when no FACEIT key is set or
+    the player isn't on FACEIT. Uses the same key the app already stores for
+    FACEIT match download (faceit_key.txt)."""
     sid = (request.args.get('steamid') or '').strip()
     if not sid.isdigit():
         return jsonify({'ok': False}), 400
     cache = _avatar_cache()
     if sid in cache:
-        return jsonify({'ok': bool(cache[sid]), 'url': cache[sid] or ''})
+        e = _avatar_entry(cache[sid])
+        return jsonify({'ok': bool(e.get('url')), **e})
     key = _faceit_key()
     if not key:
         return jsonify({'ok': False, 'reason': 'no-key'})
-    url = ''
+    e = {'url': '', 'nick': '', 'lvl': 0, 'elo': 0}
     try:
-        j = _faceit_get('/players', key, {'game': 'cs2', 'game_player_id': sid})
-        url = (j or {}).get('avatar') or ''
+        j = _faceit_get('/players', key, {'game': 'cs2', 'game_player_id': sid}) or {}
+        g = ((j.get('games') or {}).get('cs2')) or {}
+        e = {'url': j.get('avatar') or '', 'nick': j.get('nickname') or '',
+             'lvl': int(g.get('skill_level') or 0), 'elo': int(g.get('faceit_elo') or 0)}
     except Exception:
-        url = ''
+        pass
     with _avatar_lock:
         c = _avatar_cache()
-        c[sid] = url
+        c[sid] = e
         try:
             with open(_AVATAR_FILE, 'w', encoding='utf-8') as f:
                 json.dump(c, f)
         except OSError:
             pass
-    return jsonify({'ok': bool(url), 'url': url})
+    return jsonify({'ok': bool(e['url']), **e})
 
 @app.route('/api/demo/voice/<key>/<int:n>.wav')
 def demo_voice(key, n):

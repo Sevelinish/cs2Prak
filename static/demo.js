@@ -292,17 +292,56 @@
         }
     }
 
+    /* Opening a demo pulls a multi-megabyte frame table, the radar image and ten
+     * FACEIT profiles. Without a wait screen the viewer appears first and then
+     * visibly fills in for a second or two, which reads as broken. */
+    const loadEl = () => document.getElementById('dvLoading');
+
+    function showLoading(on) {
+        const el = loadEl();
+        if (el) el.hidden = !on;
+    }
+
+    function prefetchProfiles(data) {
+        const ids = (data.players || []).map(p => p && p.steamid).filter(Boolean);
+        if (!ids.length) return Promise.resolve();
+        return Promise.all(ids.map(sid =>
+            playerAvatar(sid).then(fp => new Promise(res => {
+                if (!fp || !fp.url) return res();
+                const im = new Image();
+                im.onload = im.onerror = () => res();
+                im.src = fp.url;                       // warm the browser cache
+            })).catch(() => {})));
+    }
+
+    function prefetchRadar(map) {
+        return new Promise(res => {
+            if (!map) return res();
+            const im = new Image();
+            im.onload = im.onerror = () => res();
+            im.src = '/static/radars/' + map + '.png';
+        });
+    }
+
     async function openLibraryDemo(row) {
         if (row.classList.contains('busy')) return;
         const key = row.dataset.key;
         if (!key) return;
         row.classList.add('busy');
+        showLoading(true);
         try {
             const data = await fetch('/api/demo/data/' + encodeURIComponent(key)).then(r => r.json());
-            openViewer(data);   
+            // avatars and the radar are fetched before the viewer is revealed;
+            // a slow profile lookup must not hold the demo hostage, hence the cap
+            await Promise.race([
+                Promise.all([prefetchProfiles(data), prefetchRadar(data.map)]),
+                new Promise(res => setTimeout(res, 8000)),
+            ]);
+            openViewer(data);
         } catch {
             if (window.showToast) showToast('Could not open this demo.', 'error');
         } finally {
+            showLoading(false);
             row.classList.remove('busy');
         }
     }
@@ -361,6 +400,7 @@
         buildRounds();
         buildPlayers();
         buildTimelineMarks();
+        if (window.ImpactPanel) window.ImpactPanel.attach(D);
         focusIdx = null;
         speedIdx = 1; elSpeed.textContent = '1×';
         seekToRound(0);
@@ -735,31 +775,102 @@
         return team === D.teamA ? 1 : 0;
     }
 
+    /* FACEIT avatars, resolved once per steamid and reused. Analytics is gated
+     * behind a key, so this normally succeeds; if it doesn't, the slot keeps
+     * showing initials and nothing else changes. */
+    const _avatars = {};
+    function playerAvatar(steamid) {
+        // impact.js owns the shared store; fall back only if it isn't loaded
+        if (window.FaceitProfile) return window.FaceitProfile.get(steamid);
+        if (!steamid) return Promise.resolve(null);
+        if (_avatars[steamid] !== undefined) return Promise.resolve(_avatars[steamid]);
+        _avatars[steamid] = null;
+        return fetch('/api/faceit/avatar?steamid=' + encodeURIComponent(steamid))
+            .then(r => r.json())
+            .then(j => (_avatars[steamid] = j && j.ok ? j : null))
+            .catch(() => null);
+    }
+
+    function plInitials(name) {
+        const s = (name || '?').replace(/[^\p{L}\p{N} ]/gu, '').trim();
+        if (!s) return '?';
+        const p = s.split(/\s+/);
+        return (p.length > 1 ? p[0][0] + p[1][0] : s.slice(0, 2)).toUpperCase();
+    }
+
+    let plHeads = {};
+
     function buildPlayers() {
-        elPlayers.innerHTML = ''; plRows = {}; lastInvSig = {};
+        elPlayers.innerHTML = ''; plRows = {}; plHeads = {}; lastInvSig = {};
+
         const make = idx => {
+            const p = D.players[idx] || {};
             const row = document.createElement('div');
             row.className = 'dv-pl'; row.dataset.idx = idx;
             row.innerHTML =
                 '<span class="dv-pl-hpbar"><i></i></span>' +
+                '<span class="dv-pl-av" data-initials="' + plInitials(p.name) + '"></span>' +
                 '<span class="dv-pl-name"></span>' +
                 '<span class="dv-pl-kda"></span>' +
+                '<span class="dv-pl-money"></span>' +
                 '<span class="dv-pl-ics"></span>' +
-                '<span class="dv-pl-gear"></span>' +
-                '<span class="dv-pl-money"></span>';
+                '<span class="dv-pl-gear"></span>';
             row.addEventListener('click', () => {
                 focusIdx = focusIdx === idx ? null : idx;
-                if (focusIdx !== null && D.hasLower) {       
+                if (focusIdx !== null && D.hasLower) {
                     const e = D.frames[Math.floor(cur)][idx];
                     if (e) { level = e[6]; elFloor.textContent = level ? 'LOWER' : 'UPPER'; }
                 }
                 updatePlayers(Math.floor(cur)); draw(cur);
             });
             elPlayers.appendChild(row); plRows[idx] = row;
+
+            playerAvatar(p.steamid).then(fp => {
+                if (!fp || !fp.url || !row.isConnected) return;
+                const av = row.querySelector('.dv-pl-av');
+                const im = new Image();
+                im.alt = '';
+                im.onload = () => { av.classList.add('has-img'); av.appendChild(im); };
+                im.src = fp.url;
+            });
         };
-        (D.teamA || []).forEach(make);
-        const div = document.createElement('div'); div.className = 'dv-pl-div'; elPlayers.appendChild(div);
-        (D.teamB || []).forEach(make);
+
+        const group = (team, key) => {
+            const head = document.createElement('div');
+            head.className = 'dv-tm';
+            head.innerHTML =
+                '<span class="dv-tm-ico"></span>' +
+                '<span class="dv-tm-name"></span>' +
+                '<span class="dv-tm-alive"></span>' +
+                '<span class="dv-tm-money"></span>' +
+                '<span class="dv-tm-score"></span>';
+            elPlayers.appendChild(head);
+            plHeads[key] = head;
+            (team || []).forEach(make);
+        };
+        group(D.teamA, 'A');
+        group(D.teamB, 'B');
+    }
+
+    /** Per-team strip above each five: side, name, alive count, bank, score. */
+    function updateTeamHead(key, team, fr, ec, sa, sb) {
+        const head = plHeads[key];
+        if (!head) return;
+        let side = null, alive = 0, money = 0;
+        for (const i of (team || [])) {
+            const e = fr[i];
+            if (e) { if (side === null) side = e[4]; if (e[5]) alive++; }
+            const econ = ec[i] || ec[String(i)];
+            if (econ) money += econ[0] || 0;
+        }
+        if (side === null) side = key === 'A' ? 1 : 0;
+        head.className = 'dv-tm ' + (side === 1 ? 'ct' : 't');
+        head.querySelector('.dv-tm-name').textContent =
+            (key === 'A' ? D.teamAName : D.teamBName) || (side === 1 ? 'CT' : 'T');
+        head.querySelector('.dv-tm-alive').textContent =
+            alive + '/' + (team || []).length;
+        head.querySelector('.dv-tm-money').textContent = '$' + money.toLocaleString('en-US');
+        head.querySelector('.dv-tm-score').textContent = key === 'A' ? sa : sb;
     }
     function invAt(idx, f) {                     
         const arr = D.inv[idx] || D.inv[String(idx)] || [];
@@ -807,6 +918,9 @@
             if (k.as != null) As[k.as]++;
         }
         const bw = teamBestWorst(K, De, As);
+        const rd = (D.rounds || [])[curRound] || {};
+        updateTeamHead('A', D.teamA, fr, ec, rd.sa || 0, rd.sb || 0);
+        updateTeamHead('B', D.teamB, fr, ec, rd.sa || 0, rd.sb || 0);
         for (const idx in plRows) {
             const e = fr[idx], row = plRows[idx], ii = +idx;
             const econ = ec[idx] || ec[String(idx)] || [0, 0, 0, 0, 0];
