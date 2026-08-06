@@ -50,7 +50,7 @@ def _safe_cache_key(key):
     (Werkzeug allows backslashes) can't escape the cache directory on Windows."""
     return bool(key) and re.fullmatch(r'[0-9a-f]{1,40}', key) is not None
 
-APP_VERSION = '1.1.2'
+APP_VERSION = '1.1.3'
 UPDATE_REPO = 'Sevelinish/cs2Prak'
 
 MAPS_DIR = os.path.join(_BASE, 'maps')
@@ -882,10 +882,21 @@ def check_update():
         with open(mpath, encoding='utf-8') as f:
             manifest = json.load(f)
         install = os.path.dirname(sys.executable)
+
+        # Releases from 1.1.3 on ship one update.zip instead of ~90 loose assets,
+        # which keeps the release page readable. Older releases have no bundle
+        # entry, so the per-file path below still runs for them.
+        bundle_meta = manifest.get('bundle') or {}
+        bundle_asset = assets.get(bundle_meta.get('asset')) if bundle_meta else None
+        bundle_url = bundle_asset.get('browser_download_url') if bundle_asset else None
+
         changed, size = [], 0
         for relpath, meta in (manifest.get('files') or {}).items():
             rel_os = relpath.replace('/', os.sep)
             if _sha256(os.path.join(install, rel_os)) == meta.get('sha256'):
+                continue
+            if bundle_url:
+                changed.append((relpath, None))
                 continue
             a = assets.get(meta.get('asset'))
             if not a:
@@ -894,10 +905,14 @@ def check_update():
                 return
             changed.append((relpath, a.get('browser_download_url')))
             size += int(a.get('size') or 0)
+        if bundle_url and changed:
+            # the whole archive comes down regardless of how much of it is needed
+            size = int(bundle_asset.get('size') or bundle_meta.get('size') or 0)
         if not changed:
             _update_state.update(status='up-to-date', available=False)
             return
-        _pending = {'tag': tag, 'changed': changed, 'install': install}
+        _pending = {'tag': tag, 'changed': changed, 'install': install,
+                    'bundle': bundle_url}
         # Same version but different files means the release was re-uploaded;
         # naming the tag in that message would just read as "update to what I have".
         same = _ver_tuple(tag) == _ver_tuple(APP_VERSION)
@@ -908,6 +923,27 @@ def check_update():
     except Exception as e:
         _update_state.update(status='error', message=str(e))
 
+def _extract_from_bundle(zip_path, relpaths, dest):
+    """Pull just the files we actually need out of update.zip.
+
+    Only members named in the manifest are taken, and each target is checked to
+    stay inside `dest`, so a tampered archive can't drop a file somewhere else
+    on the machine (zip-slip)."""
+    dest_abs = os.path.abspath(dest)
+    want = set(relpaths)
+    with zipfile.ZipFile(zip_path) as z:
+        names = set(z.namelist())
+        missing = [r for r in want if r not in names]
+        if missing:
+            raise RuntimeError('update.zip is missing ' + ', '.join(missing[:3]))
+        for rel in want:
+            target = os.path.abspath(os.path.join(dest_abs, rel.replace('/', os.sep)))
+            if target != dest_abs and not target.startswith(dest_abs + os.sep):
+                raise RuntimeError(f'refusing unsafe path in update.zip: {rel}')
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with z.open(rel) as src, open(target, 'wb') as out:
+                shutil.copyfileobj(src, out)
+
 def download_update():
     """User accepted: download exactly the pending changed files into a staging dir
     and write the apply script. Non-destructive (writes %TEMP% only)."""
@@ -917,8 +953,15 @@ def download_update():
         _update_state['status'] = 'downloading'
         staging = os.path.join(_UPDATE_DIR, 'staged')
         shutil.rmtree(staging, ignore_errors=True)
-        for relpath, url in _pending['changed']:
-            _download(url, os.path.join(staging, relpath.replace('/', os.sep)))
+        if _pending.get('bundle'):
+            zpath = os.path.join(_UPDATE_DIR, 'update.zip')
+            _download(_pending['bundle'], zpath)
+            _extract_from_bundle(zpath, [c[0] for c in _pending['changed']], staging)
+            try: os.remove(zpath)
+            except OSError: pass
+        else:
+            for relpath, url in _pending['changed']:
+                _download(url, os.path.join(staging, relpath.replace('/', os.sep)))
         _write_apply_script(staging)
         _update_state.update(staged=True, status='ready',
                              message=f'Update {_pending["tag"]} downloaded — restart to install.')
