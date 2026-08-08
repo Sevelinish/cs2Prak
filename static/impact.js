@@ -544,6 +544,27 @@
         close();
     }
 
+    /** The canvas was pinned to the 560px it is authored at, so on a 1080p
+     *  screen the radar sat in the middle of a 1200px column at half size.
+     *  Size it to whatever the stage cell actually offers, minus the scale
+     *  legend below it. Everything in paint() derives from canvas.width, so
+     *  the drawing is resolution-independent and just follows. */
+    function sizeCanvas() {
+        const stage = canvas.parentElement;
+        if (!stage || panel.hidden) return false;
+        const cs = getComputedStyle(stage);
+        const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+        const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+        const legend = stage.querySelector('.imp-scale');
+        const legendH = legend ? legend.getBoundingClientRect().height + parseFloat(cs.rowGap || 12) : 0;
+        const box = stage.getBoundingClientRect();
+        const s = Math.round(Math.max(520, Math.min(920,
+            Math.min(box.width - padX, box.height - padY - legendH))));
+        if (s === canvas.width) return false;
+        canvas.width = s; canvas.height = s;
+        return true;
+    }
+
     function open() {
         if (!D) return;
         if (!model) {
@@ -557,9 +578,13 @@
         radar.onerror = () => { radar = null; draw(); };
         radar.src = '/static/radars/' + D.map + '.png';
         panel.hidden = false;
+        // after the panel is shown, or the stage measures 0
+        sizeCanvas();
         setSide(side);
         document.addEventListener('keydown', onKey);
     }
+
+    window.addEventListener('resize', () => { if (!panel.hidden && sizeCanvas()) draw(); });
 
     function close() {
         panel.hidden = true;
@@ -785,21 +810,37 @@
         raf = requestAnimationFrame(paint);
     }
 
+    /** Canvas can't read CSS variables, so resolve the few tokens the radar
+     *  paints with. Without this the plates and labels stay at the dark
+     *  theme's values and invert against the light themes' radar. */
+    function token(name, fallback) {
+        const v = getComputedStyle(document.documentElement)
+            .getPropertyValue(name).trim();
+        return v || fallback;
+    }
+    function tokenRGBA(name, alpha, fallback) {
+        const hex = token(name, fallback).replace('#', '');
+        if (!/^[0-9a-f]{6}$/i.test(hex)) return fallback;
+        return 'rgba(' + parseInt(hex.slice(0, 2), 16) + ','
+                       + parseInt(hex.slice(2, 4), 16) + ','
+                       + parseInt(hex.slice(4, 6), 16) + ',' + alpha + ')';
+    }
+
     function paint() {
         raf = 0;
         const v = model && model[side] ? model[side][sel] : null;
         const W = canvas.width, H = canvas.height;
         ctx.clearRect(0, 0, W, H);
-        ctx.fillStyle = getComputedStyle(document.documentElement)
-            .getPropertyValue('--radar-bg').trim() || '#14130f';
+        ctx.fillStyle = token('--radar-bg', '#14130f');
         ctx.fillRect(0, 0, W, H);
 
         if (radar) {
             ctx.globalAlpha = 0.78;
             ctx.drawImage(radar, 0, 0, W, H);
             ctx.globalAlpha = 1;
-            // knock the map back a touch so the heat reads as the foreground
-            ctx.fillStyle = 'rgba(14,13,11,0.34)';
+            // knock the map back toward the page ground so the heat reads as
+            // the foreground — toward black on dark, toward paper on light
+            ctx.fillStyle = tokenRGBA('--bg', 0.34, 'rgba(14,13,11,0.34)');
             ctx.fillRect(0, 0, W, H);
         }
         if (!v) return;
@@ -865,17 +906,22 @@
                     0, 0, Math.PI * 2);
         ctx.strokeStyle = col;
         ctx.globalAlpha = 0.85;
-        ctx.lineWidth = 1.25;
-        ctx.setLineDash([5, 4]);
+        ctx.lineWidth = 1.25 * Math.max(1, W / 560);
+        ctx.setLineDash([5, 4].map(n => n * Math.max(1, W / 560)));
         ctx.stroke();
         ctx.restore();
         ctx.setLineDash([]);
         ctx.globalAlpha = 1;
 
+        // Annotation scale. All the sizes below were tuned against the 560px
+        // canvas this was authored at; the stage now grows to fill the column,
+        // so scale them with it or the labels shrink away against the map.
+        const K = Math.max(1, W / 560);
+
         // map landmarks, so the numbered hotspots have something to sit against
         const cal = window.Impact.calib(D.map);
         if (cal) {
-            ctx.font = '600 9px "IBM Plex Mono", monospace';
+            ctx.font = '600 ' + (9 * K).toFixed(1) + 'px "IBM Plex Mono", monospace';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             for (const [key, label] of window.Impact.LANDMARKS) {
@@ -883,7 +929,7 @@
                 if (!w || typeof w.x !== 'number') continue;
                 const lx = (w.x - cal.pos_x) / cal.scale * S;
                 const ly = (cal.pos_y - w.y) / cal.scale * S;
-                ctx.fillStyle = 'rgba(236,230,218,0.30)';
+                ctx.fillStyle = tokenRGBA('--text-primary', 0.32, 'rgba(236,230,218,0.30)');
                 ctx.fillText(T(label), lx, ly);
             }
         }
@@ -894,45 +940,48 @@
         spots.forEach((s, i) => {
             const x = (s.gx + 0.5) * cellPx * S, y = (s.gy + 0.5) * cellPx * S;
             ctx.beginPath();
-            ctx.arc(x, y, 10, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(14,13,11,0.82)';
+            ctx.arc(x, y, 10 * K, 0, Math.PI * 2);
+            ctx.fillStyle = tokenRGBA('--bg', 0.82, 'rgba(14,13,11,0.82)');
             ctx.fill();
             ctx.strokeStyle = col;
-            ctx.lineWidth = 1.4;
+            ctx.lineWidth = 1.4 * K;
             ctx.stroke();
             ctx.fillStyle = col;
-            ctx.font = '700 11px "IBM Plex Mono", monospace';
+            ctx.font = '700 ' + (11 * K).toFixed(1) + 'px "IBM Plex Mono", monospace';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
-            ctx.fillText(String(i + 1), x, y + 0.5);
+            ctx.fillText(String(i + 1), x, y + 0.5 * K);
         });
 
         // average position — the football "average position" marker
         const ax = v.mx * S, ay = v.my * S;
-        ctx.strokeStyle = '#0e0d0b';
-        ctx.lineWidth = 3.5;
-        crosshair(ax, ay);
+        ctx.strokeStyle = token('--bg', '#0e0d0b');
+        ctx.lineWidth = 3.5 * K;
+        crosshair(ax, ay, K);
         ctx.strokeStyle = col;
-        ctx.lineWidth = 1.6;
-        crosshair(ax, ay);
+        ctx.lineWidth = 1.6 * K;
+        crosshair(ax, ay, K);
 
-        ctx.font = '700 11px Rajdhani, sans-serif';
+        // canvas needs a literal stack; keep it in step with --font-head so the
+        // radar labels match the panel around them, Cyrillic nicks included
+        ctx.font = '700 ' + (11 * K).toFixed(1) + 'px "Exo 2", "Segoe UI", sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'bottom';
         const label = nameOf(v.idx).toUpperCase();
         const w = ctx.measureText(label).width;
-        ctx.fillStyle = 'rgba(14,13,11,0.88)';
-        ctx.fillRect(ax - w / 2 - 5, ay - 32, w + 10, 14);
+        ctx.fillStyle = tokenRGBA('--bg', 0.88, 'rgba(14,13,11,0.88)');
+        ctx.fillRect(ax - w / 2 - 5 * K, ay - 32 * K, w + 10 * K, 14 * K);
         ctx.fillStyle = col;
-        ctx.fillText(label, ax, ay - 20);
+        ctx.fillText(label, ax, ay - 20 * K);
     }
 
-    function crosshair(x, y) {
+    function crosshair(x, y, k) {
+        const a = 8 * k, b = 2.5 * k;
         ctx.beginPath();
-        ctx.moveTo(x - 8, y); ctx.lineTo(x - 2.5, y);
-        ctx.moveTo(x + 2.5, y); ctx.lineTo(x + 8, y);
-        ctx.moveTo(x, y - 8); ctx.lineTo(x, y - 2.5);
-        ctx.moveTo(x, y + 2.5); ctx.lineTo(x, y + 8);
+        ctx.moveTo(x - a, y); ctx.lineTo(x - b, y);
+        ctx.moveTo(x + b, y); ctx.lineTo(x + a, y);
+        ctx.moveTo(x, y - a); ctx.lineTo(x, y - b);
+        ctx.moveTo(x, y + b); ctx.lineTo(x, y + a);
         ctx.stroke();
     }
 

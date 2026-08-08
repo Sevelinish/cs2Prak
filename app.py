@@ -50,7 +50,7 @@ def _safe_cache_key(key):
     (Werkzeug allows backslashes) can't escape the cache directory on Windows."""
     return bool(key) and re.fullmatch(r'[0-9a-f]{1,40}', key) is not None
 
-APP_VERSION = '1.1.3'
+APP_VERSION = '1.1.4'
 UPDATE_REPO = 'Sevelinish/cs2Prak'
 
 MAPS_DIR = os.path.join(_BASE, 'maps')
@@ -1924,6 +1924,175 @@ def demo_data(key):
     with open(p, encoding='utf-8') as f:
         return app.response_class(f.read(), mimetype='application/json')
 
+_TRADE_SECONDS = 5
+
+def _scout_metrics(d):
+    """Scouting metrics the plain scoreboard can't express.
+
+    All of it comes out of the demo JSON that is already loaded to serve this
+    request, so nothing here needs a re-parse or a cache bump.
+
+    A note on clutches: every lost round ends with somebody being the last man
+    alive, so "attempted" is close to "rounds your team lost" and is context,
+    not an achievement. The number worth reading is how many were WON."""
+    frames = d.get('frames') or []
+    rounds = d.get('rounds') or []
+    kills = d.get('kills') or []
+    players = d.get('players') or []
+    n_frames = d.get('nFrames') or len(frames)
+    fps = d.get('fps') or 8
+    window = _TRADE_SECONDS * fps
+    n = len(players)
+
+    def side_at(f, i):
+        if not (0 <= f < len(frames)) or not frames[f]:
+            return None
+        e = frames[f][i] if i is not None and i < len(frames[f]) else None
+        return e[4] if e else None
+
+    blank = lambda: {
+        'openW': 0, 'openL': 0, 'openLTraded': 0,
+        'tradedFor': 0, 'tradedBy': 0,
+        'clutch': {}, 'rounds': [],
+        'util': {'smoke': 0, 'flash': 0, 'he': 0, 'molotov': 0,
+                 'flashHits': 0, 'flashBlindTime': 0.0, 'blindedTime': 0.0},
+        'buys': {'eco': 0, 'force': 0, 'full': 0},
+    }
+    out = [blank() for _ in range(n)]
+    matrix = [[0] * n for _ in range(n)]
+
+    # ---- duels, trades, opening duels -----------------------------------
+    for k in kills:
+        a, v = k.get('a'), k.get('v')
+        if a is None or v is None or a >= n or v >= n:
+            continue
+        matrix[a][v] += 1
+
+    for k in kills:
+        a, v, f = k.get('a'), k.get('v'), k.get('f')
+        if a is None or v is None or a >= n or v >= n:
+            continue
+        vs = side_at(f, v)
+        for k2 in kills:
+            if not (0 < k2.get('f', 0) - f <= window):
+                continue
+            if k2.get('v') != a:
+                continue
+            av = k2.get('a')
+            if av is None or av >= n:
+                continue
+            if side_at(k2['f'], av) == vs:      # avenged by the victim's side
+                out[v]['tradedFor'] += 1
+                out[av]['tradedBy'] += 1
+                break
+
+    # ---- per round: opening duel, clutch, personal line ------------------
+    for r in rounds:
+        f0, f1 = r.get('freeze', 0), min(r.get('end', 0), n_frames - 1)
+        win_side = 1 if r.get('wside') == 'CT' else 0
+        rk = [k for k in kills if f0 <= k.get('f', -1) <= r.get('end', 0)]
+
+        opener = min(rk, key=lambda x: x['f']) if rk else None
+        if opener:
+            a, v = opener.get('a'), opener.get('v')
+            if a is not None and a < n:
+                out[a]['openW'] += 1
+            if v is not None and v < n:
+                out[v]['openL'] += 1
+                if any(0 < x['f'] - opener['f'] <= window and x.get('v') == a for x in rk):
+                    out[v]['openLTraded'] += 1
+
+        # first moment a side is down to one man, and how many faced him
+        seen = set()
+        for f in range(f0, f1):
+            row = frames[f] if f < len(frames) else None
+            if not row:
+                continue
+            alive = {0: [], 1: []}
+            for i, e in enumerate(row):
+                if e and e[5] and e[4] in (0, 1):
+                    alive[e[4]].append(i)
+            for side in (0, 1):
+                foes = len(alive[1 - side])
+                if len(alive[side]) == 1 and foes >= 1 and side not in seen:
+                    seen.add(side)
+                    idx = alive[side][0]
+                    if idx < n:
+                        key = '1v%d' % min(foes, 5)
+                        c = out[idx]['clutch'].setdefault(key, [0, 0])
+                        c[0] += 1
+                        if side == win_side:
+                            c[1] += 1
+            if len(seen) == 2:
+                break
+
+        for i in range(n):
+            kk = sum(1 for x in rk if x.get('a') == i)
+            dd = any(x.get('v') == i for x in rk)
+            out[i]['rounds'].append({
+                'n': r.get('n'), 'k': kk, 'd': 1 if dd else 0,
+                'open': 1 if (opener and opener.get('a') == i) else 0,
+                'openDied': 1 if (opener and opener.get('v') == i) else 0,
+                'won': 1 if side_at(f0, i) == win_side else 0,
+            })
+
+    # ---- utility: who threw what, and whether the flashes landed ---------
+    by_name = {}
+    for i, p in enumerate(players):
+        if p.get('name'):
+            by_name.setdefault(p['name'], i)
+
+    blinds = d.get('blinds') or []
+    for fl in (d.get('flights') or []):
+        i = by_name.get(fl.get('by'))
+        t = fl.get('t')
+        if i is None or t not in out[i]['util']:
+            continue
+        out[i]['util'][t] += 1
+        if t != 'flash':
+            continue
+        path = fl.get('p') or []
+        if not path:
+            continue
+        det = path[-1][0]                        # detonation frame
+        thrower_side = side_at(int(det), i)
+        for b in blinds:
+            if not (det - 1 <= b.get('f', -1) <= det + 2):
+                continue
+            j = b.get('i')
+            if j is None or j >= n:
+                continue
+            dur = max(0.0, float(b.get('end', 0)) - float(b.get('f', 0))) / fps
+            if side_at(b['f'], j) != thrower_side:
+                out[i]['util']['flashHits'] += 1
+                out[i]['util']['flashBlindTime'] += dur
+
+    for b in blinds:
+        j = b.get('i')
+        if j is None or j >= n:
+            continue
+        out[j]['util']['blindedTime'] += max(
+            0.0, float(b.get('end', 0)) - float(b.get('f', 0))) / fps
+
+    # ---- buy discipline --------------------------------------------------
+    for _rn, per in (d.get('econ') or {}).items():
+        for idx, vals in (per or {}).items():
+            try:
+                i = int(idx)
+            except (TypeError, ValueError):
+                continue
+            if i >= n or not vals or len(vals) < 5:
+                continue
+            spend = vals[4] or 0
+            bucket = 'eco' if spend < 2000 else ('force' if spend < 3900 else 'full')
+            out[i]['buys'][bucket] += 1
+
+    for p in out:
+        p['util']['flashBlindTime'] = round(p['util']['flashBlindTime'], 1)
+        p['util']['blindedTime'] = round(p['util']['blindedTime'], 1)
+
+    return {'tradeWindow': _TRADE_SECONDS, 'players': out, 'matrix': matrix}
+
 @app.route('/api/demo/stats/<key>')
 def demo_stats(key):
     """Lightweight per-player stats for the Statistics tab (no heavy frames)."""
@@ -1938,6 +2107,7 @@ def demo_stats(key):
     last = d['rounds'][-1] if d.get('rounds') else {}
     return jsonify({
         'ok': True, 'map': d.get('map'),
+        'scout': _scout_metrics(d),
         'players': d.get('players', []), 'stats': d.get('stats', []),
         'teamA': d.get('teamA', []), 'teamB': d.get('teamB', []),
         'teamAName': d.get('teamAName'), 'teamBName': d.get('teamBName'),

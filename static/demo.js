@@ -374,13 +374,15 @@
         view = { zoom: 1, ox: 0, oy: 0 }; canvas.style.cursor = '';
         radar = null; lowerRadar = null;
         setDrawMode(false); clearDraw();
-        resizeCanvas();
         canvas.title = 'Scroll: zoom · drag: pan · Space: play/pause · ←/→: round · [ ]: kill · , .: frame · F: fullscreen · click a player when paused: copy setpos';
 
         elMap.textContent = (D.map || '').replace(/^de_/, '').toUpperCase();
         setMapThumb(elMapThumb, D.map);
         picker.style.display = 'none';
         viewer.style.display = '';
+        // must come after the viewer is shown — the stage is now sized in CSS,
+        // and a display:none stage measures 0
+        resizeCanvas();
 
         radar = new Image();
         radar.onload = () => draw(cur);
@@ -440,8 +442,9 @@
 
     function resizeCanvas() {
         dpr = window.devicePixelRatio || 1;
-        let s = (document.fullscreenElement === viewer)
-            ? Math.min(stage.clientWidth, stage.clientHeight) : 660;
+        // The stage is sized in CSS (fluid, --dv-stage) rather than fixed at
+        // 660, so always measure it instead of assuming.
+        let s = Math.min(stage.clientWidth, stage.clientHeight);
         if (!s || s < 100) s = 660;
         cssSize = s;
         canvas.style.width = s + 'px'; canvas.style.height = s + 'px';
@@ -449,6 +452,13 @@
         sizeDraw();
         if (D) { SC = cssSize / D.radarSize; clampView(); draw(cur); }
     }
+    /** Overlay text scale. The label sizes below were tuned against a 660px
+     *  stage; now that the stage grows with the window they'd shrink away
+     *  relative to the map, so scale them with it (capped, or they crowd the
+     *  markers on a busy round). Drawing coords are CSS px — a 6.3px nickname
+     *  really was 6.3px on screen. */
+    function ovs() { return Math.min(1.3, Math.max(1, cssSize / 660)); }
+
     function toggleFullscreen() {
         if (document.fullscreenElement === viewer) { if (document.exitFullscreen) document.exitFullscreen(); }
         else if (viewer.requestFullscreen) viewer.requestFullscreen();
@@ -1414,7 +1424,7 @@
         if (bl > 0.05) {
             ctx.beginPath(); ctx.arc(px, py, 8.5, 0, 7);
             ctx.strokeStyle = 'rgba(255,255,255,0.92)'; ctx.lineWidth = 2; ctx.stroke();
-            ctx.font = 'bold 8px "IBM Plex Mono", monospace'; ctx.textAlign = 'left';
+            ctx.font = 'bold ' + (8.5 * ovs()).toFixed(1) + 'px "IBM Plex Mono", monospace'; ctx.textAlign = 'left';
             ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(10,10,8,0.85)';
             ctx.strokeText(bl.toFixed(1), px + 9, py - 6);
             ctx.fillStyle = '#fff'; ctx.fillText(bl.toFixed(1), px + 9, py - 6);
@@ -1422,7 +1432,7 @@
         
         if (showNames) {
             const nm = nameOf(idx); const short = nm.length > 9 ? nm.slice(0, 9) : nm;
-            ctx.font = '6.3px "IBM Plex Mono", monospace'; ctx.textAlign = 'center';
+            ctx.font = (7.4 * ovs()).toFixed(1) + 'px "IBM Plex Mono", monospace'; ctx.textAlign = 'center';
             ctx.lineWidth = 1.8; ctx.strokeStyle = 'rgba(10,10,8,0.85)'; ctx.strokeText(short, px, py - 10);
             ctx.fillStyle = '#f3efe6'; ctx.fillText(short, px, py - 10);
         }
@@ -1431,7 +1441,7 @@
             const bw = 16, bh = 3, bx = px - bw / 2, by = py + 9;
             ctx.fillStyle = 'rgba(8,8,6,0.7)'; ctx.fillRect(bx - 1, by - 1, bw + 2, bh + 2);
             ctx.fillStyle = '#46c24f'; ctx.fillRect(bx, by, bw * Math.max(0, hp) / 100, bh);
-            ctx.font = '8px "IBM Plex Mono", monospace'; ctx.textAlign = 'left';
+            ctx.font = (8.5 * ovs()).toFixed(1) + 'px "IBM Plex Mono", monospace'; ctx.textAlign = 'left';
             ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(10,10,8,0.85)'; ctx.strokeText(hp, bx + bw + 3, by + bh);
             ctx.fillStyle = '#bfe6bf'; ctx.fillText(hp, bx + bw + 3, by + bh);
         }
