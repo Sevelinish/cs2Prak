@@ -7,6 +7,7 @@ No MySQL or XAMPP installation required.
 """
 
 import asyncio
+import logging
 import os
 import re
 import sqlite3
@@ -14,9 +15,50 @@ import sys
 import threading
 
 from mysql_mimic import MysqlServer
+from mysql_mimic import connection as _mm_connection
+from mysql_mimic import packets as _mm_packets
 from mysql_mimic.results import ResultColumn
 from mysql_mimic.session import Session
 from mysql_mimic.types import ColumnType
+
+log = logging.getLogger('cs2prak.mysql')
+
+# --------------------------------------------------------------------------
+# TINYINT(1), not TINYINT(256)
+#
+# mysql_mimic builds every column definition with the default column_length of
+# 256 and never lets a caller override it. MySqlConnector — which WeaponPaints
+# uses — only surfaces a TINYINT as `bool` when the announced length is 1
+# (TreatTinyAsBoolean, on by default); at any other length it hands back an
+# sbyte. That is what produced:
+#
+#     An error occurred in GetWeaponPaintsFromDatabase:
+#     Cannot implicitly convert type 'sbyte' to 'bool'
+#
+# from `bool weaponStatTrak = row.weapon_stattrak ?? false;` in
+# WeaponSynchronization.cs. Declaring our TINY columns as length 1 is the whole
+# fix. connection.py imports the builder both by name and through the module,
+# so both bindings have to be replaced.
+# --------------------------------------------------------------------------
+def _install_tinyint1_patch() -> bool:
+    original = _mm_packets.make_column_definition_41
+
+    def patched(*args, **kwargs):
+        if kwargs.get('column_type') is ColumnType.TINY:
+            kwargs.setdefault('column_length', 1)
+        return original(*args, **kwargs)
+
+    try:
+        _mm_packets.make_column_definition_41 = patched
+        _mm_connection.make_column_definition_41 = patched
+        _mm_connection.packets.make_column_definition_41 = patched
+        return True
+    except Exception as e:            # a future mysql_mimic could move this
+        log.error('could not apply the TINYINT(1) patch: %s — '
+                  'StatTrak reads will fail in WeaponPaints', e)
+        return False
+
+TINYINT1_PATCHED = _install_tinyint1_patch()
 
 def _db_path() -> str:
     if getattr(sys, 'frozen', False):
@@ -30,16 +72,47 @@ _SKIP = re.compile(
     re.IGNORECASE,
 )
 
-_BOOL_COLS = frozenset({'weapon_stattrak'})
+# Every statement is committed on its own, so the plugin's transaction wrapper
+# has nothing to do. Answering OK is honest — the work is already durable —
+# whereas passing these to SQLite raised "near START: syntax error" and
+# "cannot rollback - no transaction is active" on every plugin start-up.
+_TXN = re.compile(
+    r'^\s*(START\s+TRANSACTION|BEGIN(\s+WORK)?|COMMIT|ROLLBACK|SAVEPOINT|RELEASE\s+SAVEPOINT)\b',
+    re.IGNORECASE,
+)
 
-def _py_to_col_type(name: str, val) -> ColumnType:
-    """Map a Python value to the MySQL wire type WeaponPaints expects."""
+# Column types are declared, not guessed from the first row: a NULL in row one
+# (weapon_nametag is nullable) used to type the whole column as a string.
+#
+# weapon_wear is FLOAT and must stay FLOAT — the plugin reads it into a C#
+# `float`, and double -> float is not an implicit conversion, so announcing
+# DOUBLE would break it the same way TINYINT(256) broke StatTrak.
+_TEXT_COLS = frozenset({
+    'steamid', 'weapon_nametag', 'knife', 'agent_ct', 'agent_t',
+    'weapon_sticker_0', 'weapon_sticker_1', 'weapon_sticker_2',
+    'weapon_sticker_3', 'weapon_sticker_4', 'weapon_keychain',
+})
+_BOOL_COLS = frozenset({'weapon_stattrak'})
+_FLOAT_COLS = frozenset({'weapon_wear'})
+
+def _col_type(name: str, rows, idx: int) -> ColumnType:
+    """Wire type for a result column, by name where we know it and by the first
+    non-NULL value otherwise (COUNT(*) and friends)."""
     if name in _BOOL_COLS:
         return ColumnType.TINY
-    if isinstance(val, float):
+    if name in _FLOAT_COLS:
         return ColumnType.FLOAT
-    if isinstance(val, int):
-        return ColumnType.LONG
+    if name in _TEXT_COLS:
+        return ColumnType.VAR_STRING
+    for row in rows:
+        val = row[idx]
+        if val is None:
+            continue
+        if isinstance(val, float):
+            return ColumnType.FLOAT
+        if isinstance(val, int):
+            return ColumnType.LONG
+        break
     return ColumnType.VAR_STRING
 
 def _to_sqlite(sql: str) -> str | None:
@@ -50,7 +123,7 @@ def _to_sqlite(sql: str) -> str | None:
     s = sql.strip()
     if not s:
         return None
-    if _SKIP.match(s):
+    if _SKIP.match(s) or _TXN.match(s):
         return None
 
     if re.search(r'\bON\s+DUPLICATE\s+KEY\s+UPDATE\b', s, re.IGNORECASE):
@@ -88,16 +161,15 @@ class _SqliteSession(Session):
             if cur.description:
                 col_names = [d[0] for d in cur.description]
                 rows = [tuple(row) for row in cur.fetchall()]
-                if rows:
-                    cols = [
-                        ResultColumn(name, _py_to_col_type(name, val))
-                        for name, val in zip(col_names, rows[0])
-                    ]
-                else:
-                    cols = col_names
+                cols = [ResultColumn(name, _col_type(name, rows, i))
+                        for i, name in enumerate(col_names)]
                 return rows, cols
             return None
-        except Exception:
+        except Exception as e:
+            # Failing quietly is how a broken skins table used to look like an
+            # empty one. The client still gets an OK so a half-supported
+            # statement can't take the server down, but the cause is on record.
+            log.warning('query failed: %s | %s', e, ' '.join(stmt.split())[:200])
             return None
 
     async def schema(self):

@@ -50,7 +50,7 @@ def _safe_cache_key(key):
     (Werkzeug allows backslashes) can't escape the cache directory on Windows."""
     return bool(key) and re.fullmatch(r'[0-9a-f]{1,40}', key) is not None
 
-APP_VERSION = '1.1.4'
+APP_VERSION = '1.1.5'
 UPDATE_REPO = 'Sevelinish/cs2Prak'
 
 MAPS_DIR = os.path.join(_BASE, 'maps')
@@ -601,6 +601,22 @@ def ensure_schema():
             steamid  TEXT NOT NULL PRIMARY KEY,
             agent_ct TEXT DEFAULT NULL,
             agent_t  TEXT DEFAULT NULL
+        );
+        /* MusicEnabled and PinsEnabled default to true in WeaponPaints, so the
+           plugin queries these on every player connect. It does create them
+           itself on load, but only if that pass gets that far — creating them
+           here means a player join can never hit a missing table. */
+        CREATE TABLE IF NOT EXISTS wp_player_music (
+            steamid     TEXT    NOT NULL,
+            weapon_team INTEGER NOT NULL DEFAULT 0,
+            music_id    INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (steamid, weapon_team)
+        );
+        CREATE TABLE IF NOT EXISTS wp_player_pins (
+            steamid     TEXT    NOT NULL,
+            weapon_team INTEGER NOT NULL DEFAULT 0,
+            id          INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (steamid, weapon_team)
         );
     """)
     conn.commit()
@@ -1262,6 +1278,10 @@ def _install_plugin(plugin_id: str, log: list, os_pref: str = 'windows', _chain=
             ensure_css_basepath_link(log)
     elif plugin_id == 'weaponpaints':
         _patch_weaponpaints_config(log)
+        # point it at our local MySQL bridge and make sure every table the
+        # plugin queries exists, so the very first server start already works
+        _configure_weaponpaints_db(log)
+        ensure_schema()
 
     if plugin['version_src'] == 'tracker':
         st = _load_plugin_state()
@@ -1327,8 +1347,17 @@ def _install_server(log: list):
     patch_gameinfo()
     log.append('Done! CS2 server is installed.')
 
-def _configure_weaponpaints_db(log: list):
-    """Write WeaponPaints.json DB credentials pointing at our local mysql_sqlite_server."""
+def _configure_weaponpaints_db(log: list | None = None):
+    """Write WeaponPaints.json DB credentials pointing at our local mysql_sqlite_server.
+
+    Runs after install AND before every launch: CounterStrikeSharp writes its own
+    config the first time the plugin loads, which can land after our Configure
+    step and leave DatabaseHost empty. Re-checking on launch is what stops skins
+    from working only on the second or third try. An existing non-empty host is
+    left alone — that is someone pointing at their own MySQL on purpose.
+    """
+    if log is None:
+        log = []
     wp_dll = os.path.join(CSS_PLUGINS, r'WeaponPaints\WeaponPaints.dll')
     if not os.path.exists(wp_dll):
         return
@@ -1450,6 +1479,8 @@ def launch():
     if not os.path.exists(CS2_EXE):
         return jsonify({'ok': False, 'message': 'CS2 server not installed. Use the Download tab first.'}), 400
     _patch_weaponpaints_config()
+    _configure_weaponpaints_db()
+    ensure_schema()
     if os.path.isdir(CSS_BASE):
         ensure_css_basepath_link()
     data = request.get_json(silent=True) or {}

@@ -12,6 +12,10 @@ dist/
 release_assets/
 *.manifest
 
+# Release packaging script — kept local on purpose, removed from the repo in
+# 0df0029. Recover it with: git show 27b52a3:make_release.py > make_release.py
+make_release.py
+
 # Runtime / user data — created next to the exe at runtime, never commit
 skins.db
 *.db
