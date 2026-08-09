@@ -50,7 +50,7 @@ def _safe_cache_key(key):
     (Werkzeug allows backslashes) can't escape the cache directory on Windows."""
     return bool(key) and re.fullmatch(r'[0-9a-f]{1,40}', key) is not None
 
-APP_VERSION = '1.1.5'
+APP_VERSION = '1.1.6'
 UPDATE_REPO = 'Sevelinish/cs2Prak'
 
 MAPS_DIR = os.path.join(_BASE, 'maps')
@@ -1039,16 +1039,31 @@ def _patch_weaponpaints_config(log: list | None = None):
         if log is not None:
             log.append(msg)
 
+    # core.json has to be CREATED, not just patched. CounterStrikeSharp only
+    # ever reads this file — CoreConfig.cs has no writer — and falls back to
+    # built-in defaults when it is missing, where FollowCS2ServerGuidelines is
+    # true. True blocks the schema writes skins need:
+    #   Cannot set or get 'CEconItemView::m_iEntityQuality' with
+    #   "FollowCS2ServerGuidelines" option enabled.
+    # The archive ships core.example.json only, so on a fresh install there is
+    # nothing to patch and the old code silently did nothing. Seeding from the
+    # example keeps every other default the user might want to edit later.
     try:
-        with open(_CSS_CORE_CONFIG, 'r', encoding='utf-8') as f:
-            core = json.load(f)
+        core, existed = {}, os.path.exists(_CSS_CORE_CONFIG)
+        src = _CSS_CORE_CONFIG if existed else os.path.join(
+            os.path.dirname(_CSS_CORE_CONFIG), 'core.example.json')
+        if os.path.exists(src):
+            with open(src, encoding='utf-8') as f:
+                core = json.load(f)
         if core.get('FollowCS2ServerGuidelines') is not False:
             core['FollowCS2ServerGuidelines'] = False
+            os.makedirs(os.path.dirname(_CSS_CORE_CONFIG), exist_ok=True)
             with open(_CSS_CORE_CONFIG, 'w', encoding='utf-8') as f:
                 json.dump(core, f, indent=4)
-            _log('Set FollowCS2ServerGuidelines=false in CSS core.json.')
-    except Exception:
-        pass
+            _log('Set FollowCS2ServerGuidelines=false in CSS core.json.'
+                 if existed else 'Created CSS core.json with FollowCS2ServerGuidelines=false.')
+    except Exception as e:
+        _log(f'! Could not write CSS core.json: {e}')
 
     try:
         with open(_WP_CONFIG, 'r', encoding='utf-8') as f:
@@ -1276,6 +1291,9 @@ def _install_plugin(plugin_id: str, log: list, os_pref: str = 'windows', _chain=
             _ensure_dotnet8(log)
         if os.path.isdir(CSS_BASE):
             ensure_css_basepath_link(log)
+        # a fresh CSS drop has no core.json at all; write ours now rather than
+        # leaving skins broken until something else happens to create one
+        _patch_weaponpaints_config(log)
     elif plugin_id == 'weaponpaints':
         _patch_weaponpaints_config(log)
         # point it at our local MySQL bridge and make sure every table the
@@ -2208,12 +2226,23 @@ def demo_voice(key, n):
     with open(p, 'rb') as f:
         return app.response_class(f.read(), mimetype='audio/wav')
 
+# Two files rather than one so a player teleport can't overwrite the nade lineup
+# you were practising: bind a key to each and they stay independent.
+_TELEPORT_CFGS = {
+    'nade': ('expNade.cfg', 'nade lineup'),
+    'pos':  ('expPos.cfg',  'player position'),
+}
+
 @app.route('/api/demo/nade-export', methods=['POST'])
 def demo_nade_export():
-    """Write expNade.cfg into the client cfg folder with setpos/setang of a throw,
-    so the user can `exec expNade` in-game to teleport to the lineup."""
+    """Write a teleport cfg into the *client* cfg folder so the user can jump to
+    the spot with `exec expNade` / `exec expPos` in game.
+
+    `kind` picks the target file; anything unknown falls back to the nade one so
+    an older frontend build keeps working."""
     data = request.get_json(silent=True) or {}
     sp, sa = data.get('sp'), data.get('sa')
+    name, label = _TELEPORT_CFGS.get(data.get('kind'), _TELEPORT_CFGS['nade'])
     if not (isinstance(sp, list) and len(sp) == 3 and isinstance(sa, list) and len(sa) == 2):
         return jsonify({'ok': False, 'message': 'No lineup data'}), 400
     try:
@@ -2221,18 +2250,27 @@ def demo_nade_export():
         sa = [float(v) for v in sa]
     except (TypeError, ValueError):
         return jsonify({'ok': False, 'message': 'Bad lineup data'}), 400
+    # The CS2 console renders this echo, and it mangles anything outside ASCII —
+    # an em-dash or a Cyrillic nickname comes back as garbage — so the line is
+    # stripped down to characters the console can actually print.
+    who = str(data.get('who') or '')[:48]
+    who = ''.join(c for c in who if 32 <= ord(c) < 127 and c not in '"\\')
+    who = ' '.join(who.split())          # an all-Cyrillic nick filters down to
+                                         # spaces; drop it rather than echo "- "
+    cmd = name[:-4]                                     # expPos.cfg -> expPos
     content = ('sv_cheats 1\n'
                f'setpos {sp[0]} {sp[1]} {sp[2]}\n'
                f'setang {sa[0]} {sa[1]} 0\n'
-               'echo "[cs2prak] teleported to nade lineup — exec expNade"\n')
+               f'echo "[cs2prak] teleported to {label}'
+               + (f' - {who}' if who else '') + f' (exec {cmd})"\n')
     cfg_dir = _find_client_cfg_dir()
     if not cfg_dir:
         return jsonify({'ok': False, 'message': 'CS2 cfg folder not found'}), 404
     try:
-        path = os.path.join(cfg_dir, 'expNade.cfg')
+        path = os.path.join(cfg_dir, name)
         with open(path, 'w', encoding='utf-8') as f:
             f.write(content)
-        return jsonify({'ok': True, 'path': path})
+        return jsonify({'ok': True, 'path': path, 'cmd': cmd})
     except OSError as e:
         return jsonify({'ok': False, 'message': str(e)}), 500
 

@@ -16,7 +16,8 @@ release_assets/
 # 0df0029. Recover it with: git show 27b52a3:make_release.py > make_release.py
 make_release.py
 
-# Runtime / user data — created next to the exe at runtime, never commit
+# Runtime / user data — created next to the exe at runtime, never commit.
+# faceit_key.txt is a personal API credential: it must never reach the repo.
 skins.db
 *.db
 faceit_key.txt
@@ -25,9 +26,22 @@ demo_library.json
 faceit_avatars.json
 demos_cache/
 cs2Server/
+overlay_state.json
+
+# Anything that looks like a credential, whatever it ends up being called.
+# Cheap insurance: the rules above only cover the names we ship today.
+*.key
+*.pem
+*.pfx
+.env
+.env.*
+*secret*
+*_token*
+credentials*
 
 # Logs & local backups
 *.log
+*.bak
 *_backup*/
 _databackup_*/
 _audit_backup_*/

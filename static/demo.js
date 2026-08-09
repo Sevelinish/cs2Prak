@@ -8,7 +8,8 @@
     const dropEl = $('demoDrop'), hintEl = $('demoPickHint');
     const canvas = $('dvCanvas'), ctx = canvas.getContext('2d');
     const elMap = $('dvMap'), elMapThumb = $('dvMapThumb'), elScore = $('dvScore'), elRoundTag = $('dvRoundTag'),
-          elBombTag = $('dvBombTag'), elClock = $('dvClock'), elFloor = $('dvFloor');
+          elBombTag = $('dvBombTag'), elClock = $('dvClock'), elFloor = $('dvFloor'),
+          elElapsed = $('dvElapsed');
     const elRounds = $('dvRounds'), elPlayers = $('dvPlayers'), elKills = $('dvKills');
     const elRoundsPop = $('dvRoundsPop');
     const elNades = $('dvNades');
@@ -18,7 +19,7 @@
         elRoundsPop.addEventListener('click', (e) => e.stopPropagation());
         document.addEventListener('click', () => elRoundsPop.classList.remove('open'));
     }
-    const nadePop = $('dvNadePop'), nadeTitle = $('dvNadeTitle'), nadePos = $('dvNadePos'),
+    const nadePop = $('dvNadePop'), nadePos = $('dvNadePos'),
           nadeAng = $('dvNadeAng'), nadeNote = $('dvNadeNote');
     const dvLaunch = $('dvLaunch'); let launchPoll = null;
     const elPlay = $('dvPlay'), elSpeed = $('dvSpeed');
@@ -30,8 +31,13 @@
     let voiceMode = 0;                     
     const voiceAudios = {};                
     const stage = canvas.parentElement;    
-    const TEAM = { 1: '#5b9bd5', 0: '#ff6a1f' };   
-    const SPEEDS = [0.5, 1, 2, 4];
+    /* Read the side colours off the stylesheet instead of hardcoding a second
+       pair: the canvas was drawing #5b9bd5/#ff6a1f while every DOM element used
+       --team-ct/--team-t, so the radar dots never quite matched the roster. */
+    const _cssVar = (n, fb) =>
+        getComputedStyle(document.documentElement).getPropertyValue(n).trim() || fb;
+    const TEAM = { 1: _cssVar('--team-ct', '#5b9bd5'), 0: _cssVar('--team-t', '#ff6a1f') };
+    const SPEEDS = [0.25, 0.5, 1, 2, 4];
     const ROUND_TIME = 115;                 
     const bombImg = new Image(); bombImg.src = '/static/weapon_icons/bomb.png';
     const GREN_IMG = {};                    
@@ -42,7 +48,7 @@
 
     let D = null, radar = null, SC = 1, dpr = 1;
     const micImg = new Image(); micImg.src = '/static/mic_white.png?v=76';   
-    let cur = 0, playing = false, raf = 0, lastTs = 0, speedIdx = 1;
+    let cur = 0, playing = false, raf = 0, lastTs = 0, speedIdx = SPEEDS.indexOf(1);
     let curRound = -1, scrubbing = false;
     const MAXZOOM = 5;
     let view = { zoom: 1, ox: 0, oy: 0 }, panning = false, panLast = null;
@@ -374,7 +380,7 @@
         view = { zoom: 1, ox: 0, oy: 0 }; canvas.style.cursor = '';
         radar = null; lowerRadar = null;
         setDrawMode(false); clearDraw();
-        canvas.title = 'Scroll: zoom · drag: pan · Space: play/pause · ←/→: round · [ ]: kill · , .: frame · F: fullscreen · click a player when paused: copy setpos';
+        canvas.title = 'Scroll: zoom · drag: pan · Space: play/pause · ←/→: round · [ ]: kill · , .: frame · F: fullscreen · click a player when paused: sends you there in game (exec expPos)';
 
         elMap.textContent = (D.map || '').replace(/^de_/, '').toUpperCase();
         setMapThumb(elMapThumb, D.map);
@@ -404,7 +410,7 @@
         buildTimelineMarks();
         if (window.ImpactPanel) window.ImpactPanel.attach(D);
         focusIdx = null;
-        speedIdx = 1; elSpeed.textContent = '1×';
+        speedIdx = SPEEDS.indexOf(1); paintSpeed();
         seekToRound(0);
         refreshLaunchBtn(); startLaunchPoll();
     }
@@ -570,23 +576,50 @@
         }
         return best;
     }
-    function copyPlayerSetpos(idx) {
+    /** Same contract as the other modules: look the key up, then fill {slots}. */
+    function T(k, params) {
+        let v = (window.t ? window.t(k) : k);
+        if (params) for (const p in params) v = v.split('{' + p + '}').join(params[p]);
+        return v;
+    }
+
+    /** Clicking a player writes expPos.cfg into the CS2 client cfg folder rather
+     *  than the clipboard: pasting into the console means alt-tabbing out of the
+     *  game, while `exec expPos` can sit on a bind and teleport you instantly.
+     *  Falls back to the clipboard only if the cfg folder can't be found. */
+    function exportPlayerSetpos(idx) {
         const fr = D.frames[Math.min(D.nFrames - 1, Math.max(0, Math.round(cur)))];
         const e = fr[idx]; if (!e) return;
-        const x = Math.round(e[0] * D.scale + D.posX);  
+        const x = Math.round(e[0] * D.scale + D.posX);
         const y = Math.round(D.posY - e[1] * D.scale);
         const z = e[8] | 0, pitch = e[9] | 0, yaw = Math.round(e[2]);
-        const cmd = `setpos ${x} ${y} ${z};setang ${pitch} ${yaw} 0`;
         const note = (m, t) => { if (typeof showToast === 'function') showToast(m, t); };
-        const done = () => note(nameOf(idx) + ' → setpos copied', 'success');
-        if (navigator.clipboard && navigator.clipboard.writeText)
-            navigator.clipboard.writeText(cmd).then(done, () => note(cmd, 'info'));
-        else note(cmd, 'info');
+        const who = nameOf(idx);
+
+        fetch('/api/demo/nade-export', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ kind: 'pos', sp: [x, y, z], sa: [pitch, yaw], who })
+        })
+            .then(r => r.json())
+            .then(j => {
+                if (j && j.ok) { note(T('dv.posSaved', { who: who, cmd: j.cmd || 'expPos' }), 'success'); return; }
+                clipboardFallback();
+            })
+            .catch(clipboardFallback);
+
+        function clipboardFallback() {
+            const cmd = `setpos ${x} ${y} ${z};setang ${pitch} ${yaw} 0`;
+            if (navigator.clipboard && navigator.clipboard.writeText)
+                navigator.clipboard.writeText(cmd).then(
+                    () => note(T('dv.posCopied', { who: who }), 'info'),
+                    () => note(cmd, 'info'));
+            else note(cmd, 'info');
+        }
     }
     canvas.addEventListener('click', e => {
         if (pressMoved || playing) return;              
         const idx = playerAtClient(e.clientX, e.clientY);
-        if (idx >= 0) copyPlayerSetpos(idx);
+        if (idx >= 0) exportPlayerSetpos(idx);
     });
     canvas.addEventListener('mousemove', e => {         
         if (panning || playing || view.zoom > 1) return;
@@ -625,31 +658,53 @@
         if (n === 'planted_c4' || n === 'c4') return 'c4explosive';
         return KILL_ICON[n] || 'knife';
     };
+    /** Round clock at a frame — the same reading the scoreboard shows, so a feed
+     *  row can be matched against what you remember of the round. */
+    function roundClock(f) {
+        const r = D.rounds[curRound];
+        const sec = Math.max(0, Math.round(ROUND_TIME - (f - r.freeze) / D.fps));
+        return Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0');
+    }
+
     function renderKills() {
         const r = D.rounds[curRound];
         const ks = D.kills.filter(k => k.f >= r.start && k.f <= r.end);
-        if (!ks.length) { elKills.innerHTML = '<div class="dv-kills-empty">No kills this round.</div>'; return; }
+        if (!ks.length) { elKills.innerHTML = '<div class="dv-kills-empty">' + T('dv.noKills') + '</div>'; return; }
         elKills.innerHTML = '';
         ks.forEach(k => {
             const row = document.createElement('div');
             row.className = 'dv-kill' + (k.f <= cur ? ' past' : '');
             row.dataset.f = k.f;
             const aTeam = teamOf(k.a, k.f), vTeam = teamOf(k.v, k.f), sl = killIcon(k.w);
+            // killer right-aligned into the weapon cell, victim left out of it:
+            // the direction of the kill reads without an arrow, and the fixed
+            // weapon cell keeps a headshot from shifting the row
             row.innerHTML =
+                `<span class="dv-kill-t">${roundClock(k.f)}</span>` +
                 `<span class="dv-kill-a ${aTeam}">${nameOf(k.a)}</span>` +
-                `<span class="dv-kill-w" style="-webkit-mask-image:url(/static/weapon_icons/${sl}.png);` +
-                `mask-image:url(/static/weapon_icons/${sl}.png)"></span>` +
-                (k.hs ? '<span class="dv-kill-hs" title="headshot"></span>' : '') +
+                `<span class="dv-kill-wrap">` +
+                    `<span class="dv-kill-w" style="-webkit-mask-image:url(/static/weapon_icons/${sl}.png);` +
+                    `mask-image:url(/static/weapon_icons/${sl}.png)"></span>` +
+                    (k.hs ? '<span class="dv-kill-hs" title="headshot"></span>' : '') +
+                `</span>` +
                 `<span class="dv-kill-v ${vTeam}">${nameOf(k.v)}</span>`;
             row.addEventListener('click', () => { seek(k.f); });
             elKills.appendChild(row);
         });
+        markPastKills();
     }
 
+    /** Dim what already happened, and mark the latest one as where you are —
+     *  without it the feed gives no clue which kill the playhead just passed. */
     function markPastKills() {
+        let newest = null;
         elKills.querySelectorAll('.dv-kill').forEach(el => {
-            el.classList.toggle('past', (+el.dataset.f) <= cur);
+            const done = (+el.dataset.f) <= cur;
+            el.classList.toggle('past', done);
+            el.classList.remove('is-now');
+            if (done) newest = el;
         });
+        if (newest) newest.classList.add('is-now');
     }
 
     const NADE_LBL  = { smoke: 'Smoke', he: 'HE', flash: 'Flash', molotov: 'Molotov', decoy: 'Decoy' };
@@ -665,7 +720,7 @@
         const ns = (D.flights || []).map((f, i) => ({ f, i }))
             .filter(o => o.f.sp && o.f.p[0][0] >= r.start && o.f.p[0][0] <= r.end)
             .sort((a, b) => a.f.p[0][0] - b.f.p[0][0]);
-        if (!ns.length) { elNades.innerHTML = '<div class="dv-kills-empty">No nades this round.</div>'; return; }
+        if (!ns.length) { elNades.innerHTML = '<div class="dv-kills-empty">' + T('dv.noNades') + '</div>'; return; }
         elNades.innerHTML = '';
         for (const o of ns) {
             const f = o.f, tf = f.p[0][0], col = FLY_COL[f.t] || '#fff';
@@ -673,12 +728,14 @@
             const row = document.createElement('div');
             row.className = 'dv-nade' + (tf <= cur ? ' past' : '');
             row.dataset.f = tf;
+            // time first, same as the kill feed above it: one column to scan
             row.innerHTML =
+                `<span class="dv-nade-time">${nadeTime(tf)}</span>` +
                 `<span class="dv-nade-ic" style="-webkit-mask-image:url(/static/weapon_icons/${sl}.png);` +
                 `mask-image:url(/static/weapon_icons/${sl}.png);background:${col}"></span>` +
                 `<span class="dv-nade-by">${f.by || '?'}</span>` +
                 `<span class="dv-nade-t">${NADE_LBL[f.t] || f.t}</span>` +
-                `<span class="dv-nade-time">${nadeTime(tf)}</span>`;
+                `<span class="dv-nade-go" aria-hidden="true"></span>`;
             row.addEventListener('click', () => openNade(o.i));
             elNades.appendChild(row);
         }
@@ -693,7 +750,15 @@
         nadeSel = f;
         pause();
         seek(f.p[0][0]);
-        nadeTitle.textContent = (NADE_LBL[f.t] || f.t) + ' — ' + (f.by || '?');
+        // type, thrower and when it went out — the same context the list row
+        // carries, so the card stands on its own once it's open
+        const ic = $('dvNadeIcon'), sl = NADE_ICON[f.t] || 'smokegrenade';
+        const u = 'url(/static/weapon_icons/' + sl + '.png)';
+        ic.style.webkitMaskImage = u; ic.style.maskImage = u;
+        ic.style.background = FLY_COL[f.t] || '#fff';
+        $('dvNadeType').textContent = NADE_LBL[f.t] || f.t;
+        $('dvNadeBy').textContent =
+            (f.by || '?') + ' · ' + T('dv.round') + ' ' + (curRound + 1) + ' · ' + nadeTime(f.p[0][0]);
         nadePos.textContent = f.sp.join(' ');
         nadeAng.textContent = f.sa.join(' ') + ' 0';
         nadeNote.textContent = '';
@@ -706,19 +771,23 @@
         if (!nadeSel) return;
         const cmd = `setpos ${nadeSel.sp.join(' ')};setang ${nadeSel.sa.join(' ')} 0`;
         navigator.clipboard.writeText(cmd).then(
-            () => { nadeNote.textContent = 'Copied to clipboard'; },
+            () => { nadeNote.textContent = T('dv.np.copied'); },
             () => { nadeNote.textContent = cmd; });
     });
     $('dvNadeExport').addEventListener('click', () => {
         if (!nadeSel) return;
-        nadeNote.textContent = 'Exporting…';
+        nadeNote.textContent = T('dv.np.sending');
         fetch('/api/demo/nade-export', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sp: nadeSel.sp, sa: nadeSel.sa })
+            body: JSON.stringify({ kind: 'nade', sp: nadeSel.sp, sa: nadeSel.sa, who: nadeSel.by || '' })
         }).then(r => r.json()).then(j => {
-            nadeNote.textContent = j.ok ? 'Saved expNade.cfg — run  exec expNade  in game'
-                                        : ('Error: ' + (j.message || 'failed'));
-        }).catch(() => { nadeNote.textContent = 'Export failed'; });
+            nadeNote.textContent = j.ok ? T('dv.np.sent', { cmd: j.cmd || 'expNade' })
+                                        : T('dv.np.failed') + ': ' + (j.message || '');
+            nadeNote.className = 'dv-nadepop-note' + (j.ok ? ' is-ok' : ' is-err');
+        }).catch(() => {
+            nadeNote.textContent = T('dv.np.failed');
+            nadeNote.className = 'dv-nadepop-note is-err';
+        });
     });
 
     const gearBtn = $('dvGear'), settingsEl = $('dvSettings');
@@ -991,7 +1060,42 @@
     function play() { if (playing || !D) return; if (cur >= D.nFrames - 1) cur = 0; playing = true; lastTs = performance.now(); setPlayIcon(); raf = requestAnimationFrame(loop); }
     function pause() { playing = false; setPlayIcon(); if (raf) cancelAnimationFrame(raf); voiceStopAll(); }
     elPlay.addEventListener('click', () => playing ? pause() : play());
-    elSpeed.addEventListener('click', () => { speedIdx = (speedIdx + 1) % SPEEDS.length; elSpeed.textContent = SPEEDS[speedIdx] + '×'; });
+    /* Was a button that cycled: to reach 0.5x from 2x you clicked through every
+       other speed while the demo kept playing. A list shows the options and
+       takes one click to any of them. */
+    const spdWrap = $('dvSpeedWrap'), spdMenu = $('dvSpeedMenu');
+
+    function paintSpeed() {
+        elSpeed.innerHTML = SPEEDS[speedIdx] + '×<i class="dv-spd-caret" aria-hidden="true"></i>';
+        spdMenu.querySelectorAll('.dv-spd-o').forEach(b => {
+            const on = +b.dataset.i === speedIdx;
+            b.classList.toggle('is-on', on);
+            b.setAttribute('aria-selected', String(on));
+        });
+    }
+    function closeSpeed() {
+        spdWrap.classList.remove('is-open');
+        spdMenu.hidden = true;
+        elSpeed.setAttribute('aria-expanded', 'false');
+    }
+    spdMenu.innerHTML = SPEEDS.map((v, i) =>
+        '<button class="dv-spd-o" type="button" role="option" data-i="' + i + '">' + v + '×</button>').join('');
+    spdMenu.querySelectorAll('.dv-spd-o').forEach(b => {
+        b.addEventListener('click', () => {
+            speedIdx = +b.dataset.i;
+            paintSpeed();
+            closeSpeed();
+        });
+    });
+    elSpeed.addEventListener('click', e => {
+        e.stopPropagation();
+        const open = spdWrap.classList.toggle('is-open');
+        spdMenu.hidden = !open;
+        elSpeed.setAttribute('aria-expanded', String(open));
+    });
+    document.addEventListener('click', closeSpeed);
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSpeed(); });
+    paintSpeed();
     $('dvPrevRound').addEventListener('click', () => seekToRound(Math.max(0, roundAt(Math.floor(cur)) - 1)));
     $('dvNextRound').addEventListener('click', () => seekToRound(Math.min(D.rounds.length - 1, roundAt(Math.floor(cur)) + 1)));
     $('dvSkipBuy').addEventListener('click', () => { const r = D.rounds[roundAt(Math.floor(cur))]; if (r) seek(r.freeze); });
@@ -1038,6 +1142,14 @@
         elClock.textContent = Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0');
         elClock.classList.toggle('bomb', !!bs && !buy);
         elClock.classList.toggle('buy', buy);
+
+        /* The top clock counts the round down; this is position in the demo as a
+           whole, which the timeline had no readout for at all. */
+        if (elElapsed) {
+            const mmss = f => Math.floor(f / D.fps / 60) + ':' +
+                String(Math.floor(f / D.fps) % 60).padStart(2, '0');
+            elElapsed.innerHTML = mmss(cur) + '<i>/</i>' + mmss(D.nFrames);
+        }
         
         const prev = ri > 0 ? D.rounds[ri - 1] : null;
         const sA = prev ? (prev.sa || 0) : 0, sB = prev ? (prev.sb || 0) : 0;
@@ -1119,21 +1231,44 @@
             }
         }
         if (!rows.length) return;
+
+        /* Was a flat translucent box with the nickname tinted by side — the tint
+           was the only signal and it sat on a dark fill, so at 11px it barely
+           registered. Now the side is a solid bar down the left edge, the name
+           runs at full contrast, and a level meter shows who is actually loud. */
+        const S = 22, PAD = 8, GAP = 4, ICON = 13;
         ctx.save();
-        ctx.font = '11px "IBM Plex Mono", monospace';
+        ctx.font = '600 12px "IBM Plex Mono", monospace';
         ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-        let yy = 10;
+        let yy = PAD;
         for (const u of rows) {
             const nm = (D.players[u.idx] && D.players[u.idx].name) || '?';
             const col = TEAM[u.side] || '#fff';
-            const w = ctx.measureText(nm).width;
-            ctx.fillStyle = 'rgba(8,8,6,0.62)';
-            ctx.fillRect(6, yy, 26 + w, 16);
-            
+            const w = Math.ceil(ctx.measureText(nm).width);
+            const boxW = 3 + ICON + 8 + w + 20 + PAD;
+
+            ctx.fillStyle = 'rgba(10,9,7,0.82)';
+            ctx.fillRect(PAD, yy, boxW, S);
+            ctx.fillStyle = col;
+            ctx.fillRect(PAD, yy, 3, S);                       // side edge
+
             if (micImg.complete && micImg.naturalWidth)
-                ctx.drawImage(micImg, 9, yy + 2, 12, 12);
-            ctx.fillStyle = col; ctx.fillText(nm, 25, yy + 9);
-            yy += 18;
+                ctx.drawImage(micImg, PAD + 9, yy + (S - ICON) / 2, ICON, ICON);
+
+            ctx.fillStyle = '#f2ede4';
+            ctx.fillText(nm, PAD + 9 + ICON + 7, yy + S / 2 + 0.5);
+
+            // three ticks that rise while the clip plays, so a long talker is
+            // visibly different from someone who clipped in for half a second
+            const prog = Math.min(1, Math.max(0, (f - u.f) / (u.dur * D.fps || 1)));
+            const bx = PAD + boxW - 17;
+            for (let i = 0; i < 3; i++) {
+                const on = prog * 3 > i;
+                const h = 4 + i * 3;
+                ctx.fillStyle = on ? col : 'rgba(255,255,255,0.16)';
+                ctx.fillRect(bx + i * 5, yy + S - 6 - h, 3, h);
+            }
+            yy += S + GAP;
         }
         ctx.restore();
     }

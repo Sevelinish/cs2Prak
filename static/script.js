@@ -610,8 +610,15 @@ document.getElementById('osLabelLin').addEventListener('click', () => {
 
 _syncOSLabels();
 
+/* Alternate themes are off until 1.1.7 — they never got the contrast pass the
+   dark palette had, so half the analytics screens read badly on them. Forcing
+   dark here (and not just hiding the picker) matters: anyone who already chose
+   rose or slate has it in localStorage and would otherwise be stuck on a theme
+   with no way back. */
+const THEMES_ENABLED = false;
+
 window.applyTheme = function (theme) {
-    const t = theme || 'dark';
+    const t = THEMES_ENABLED ? (theme || 'dark') : 'dark';
     if (t === 'dark') document.documentElement.removeAttribute('data-theme');
     else              document.documentElement.setAttribute('data-theme', t);
     try { localStorage.setItem('cs2prak_theme', t); } catch (e) {}
@@ -621,21 +628,34 @@ window.applyTheme = function (theme) {
     
     const themeSeg = document.getElementById('setThemeSeg');
     if (themeSeg) {
-        const syncTheme = () => {
-            const cur = localStorage.getItem('cs2prak_theme') || 'dark';
+        if (!THEMES_ENABLED) {
+            // pull anyone stored on rose/slate back to dark, then lock the card
+            window.applyTheme('dark');
             themeSeg.querySelectorAll('.dv-seg-btn').forEach(b => {
-                const on = b.dataset.theme === cur;
-                b.classList.toggle('on', on);
-                b.setAttribute('aria-checked', on ? 'true' : 'false');
+                const dark = b.dataset.theme === 'dark';
+                b.classList.toggle('on', dark);
+                b.setAttribute('aria-checked', dark ? 'true' : 'false');
+                b.disabled = true;
             });
-        };
-        themeSeg.querySelectorAll('.dv-seg-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                window.applyTheme(btn.dataset.theme);
-                syncTheme();
+            const card = themeSeg.closest('.set-card');
+            if (card) card.classList.add('is-locked');
+        } else {
+            const syncTheme = () => {
+                const cur = localStorage.getItem('cs2prak_theme') || 'dark';
+                themeSeg.querySelectorAll('.dv-seg-btn').forEach(b => {
+                    const on = b.dataset.theme === cur;
+                    b.classList.toggle('on', on);
+                    b.setAttribute('aria-checked', on ? 'true' : 'false');
+                });
+            };
+            themeSeg.querySelectorAll('.dv-seg-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    window.applyTheme(btn.dataset.theme);
+                    syncTheme();
+                });
             });
-        });
-        syncTheme();
+            syncTheme();
+        }
     }
 
     const langSeg = document.getElementById('setLangSeg');
