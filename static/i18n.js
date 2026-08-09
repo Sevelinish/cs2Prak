@@ -28,6 +28,8 @@ const I18N = {
 
     'server.title':    'MAP SELECTION',
     'server.tag':      'FACEIT POOL',
+    'server.extra':    'ADDITIONAL',
+    'server.extraSub': 'Outside the FACEIT pool',
     'server.selected': 'SELECTED:',
     'server.connect':  'CONNECT',
     'server.copy':     'COPY',
@@ -553,6 +555,8 @@ const I18N = {
 
     'server.title':    'ВЫБОР КАРТЫ',
     'server.tag':      'ПУЛ FACEIT',
+    'server.extra':    'ДОПОЛНИТЕЛЬНО',
+    'server.extraSub': 'Вне пула FACEIT',
     'server.selected': 'ВЫБРАНО:',
     'server.connect':  'ПОДКЛЮЧЕНИЕ',
     'server.copy':     'КОПИЯ',

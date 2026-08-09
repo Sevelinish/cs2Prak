@@ -2554,6 +2554,45 @@ body::before { content: none; }
    alone says how good he is and the gap says what breaks. Same ruled-block
    language as the scout report in Statistics. */
 
+/* --- maps outside the FACEIT pool ---------------------------------------
+   Folded away by default: the eight-map pool is what this screen is for, and
+   these two would otherwise read as part of it. */
+.maps-extra { margin-top: var(--sp-3); }
+.maps-extra[hidden] { display: none; }
+.maps-extra-sum {
+    display: flex; align-items: center; gap: var(--sp-2);
+    padding: var(--sp-3) 0; cursor: pointer; list-style: none;
+    font-family: var(--font-head); font-weight: 700; font-size: var(--fs-2xs);
+    letter-spacing: var(--tr-micro); text-transform: uppercase; color: var(--text-secondary);
+    border-top: 1px solid var(--line);
+    transition: color var(--t);
+}
+.maps-extra-sum::-webkit-details-marker { display: none; }
+.maps-extra-sum:hover { color: var(--paper-100); }
+.maps-extra-sum::before {
+    content: ''; width: 0; height: 0; flex: none;
+    border-left: 5px solid var(--accent);
+    border-top: 4px solid transparent; border-bottom: 4px solid transparent;
+    transition: transform var(--t);
+}
+.maps-extra[open] .maps-extra-sum::before { transform: rotate(90deg); }
+.maps-extra-n {
+    font-family: var(--font-mono); font-weight: 600; color: var(--accent);
+    background: var(--accent-wash); border: 1px solid var(--accent-dim);
+    padding: 0 var(--sp-2); font-variant-numeric: tabular-nums;
+}
+.maps-extra-sub {
+    font-family: var(--font-body); font-weight: 400; font-size: var(--fs-2xs);
+    letter-spacing: 0; text-transform: none; color: var(--text-muted); margin-left: auto;
+}
+.maps-extra .maps-grid { margin-top: 0; }
+
+/* the thumbnail for these is dropped in by the user; until it is there the card
+   still has to be selectable, so fall back to the name on a plain field */
+.map-card.no-thumb .map-image { display: none; }
+.map-card.no-thumb { background: var(--surface-3); }
+.map-card.no-thumb .map-footer { background: none; }
+
 /* --- selection bar: map, player picker, reload -------------------------- */
 .av-bar {
     display: flex; align-items: center; gap: var(--sp-5); flex-wrap: wrap;

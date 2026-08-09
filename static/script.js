@@ -9,6 +9,11 @@ const MAPS = [
     { id: 'de_anubis',    name: 'ANUBIS',    file: 'Anubis.jpg'    },
     { id: 'de_cache',     name: 'CACHE',     file: 'Cache.jpg'     },
     { id: 'de_overpass',  name: 'OVERPASS',  file: 'Overpass.jpg'  },
+    /* Outside the FACEIT pool, so they sit behind the "extra" fold rather than
+       padding the main grid. One list all the same: statistics.js and demo.js
+       look thumbnails up here, and the radars for both already ship. */
+    { id: 'de_vertigo',   name: 'VERTIGO',   file: 'Vertigo.jpg', extra: true },
+    { id: 'de_train',     name: 'TRAIN',     file: 'Train.jpg',   extra: true },
 ];
 
 let selectedMap   = null;
@@ -32,6 +37,10 @@ const connectCopyBtn  = document.getElementById('connectCopyBtn');
 const connectJoinBtn  = document.getElementById('connectJoinBtn');
 
 function buildMaps() {
+    const extraGrid = document.getElementById('mapsGridExtra');
+    const extraWrap = document.getElementById('mapsExtra');
+    let extras = 0;
+
     MAPS.forEach(map => {
         const card = document.createElement('div');
         card.className = 'map-card';
@@ -57,8 +66,20 @@ function buildMaps() {
         card.addEventListener('keydown', e => {
             if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectMap(map, card); }
         });
-        mapsGrid.appendChild(card);
+        // the thumbnail is user-supplied for the extra maps; without this the
+        // card would show a broken image until the file is dropped in
+        const img = card.querySelector('.map-image');
+        img.addEventListener('error', () => card.classList.add('no-thumb'));
+
+        if (map.extra && extraGrid) { extraGrid.appendChild(card); extras++; }
+        else { mapsGrid.appendChild(card); }
     });
+
+    if (extraWrap) {
+        extraWrap.hidden = extras === 0;
+        const n = extraWrap.querySelector('.maps-extra-n');
+        if (n) n.textContent = extras;
+    }
 }
 
 function selectMap(map, card) {
