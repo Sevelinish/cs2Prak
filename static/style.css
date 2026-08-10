@@ -3177,8 +3177,102 @@ body::before { content: none; }
 
 /* Both flanks widen with the window: at 1920 the profile column was leaving
    the metric bars cramped while the centre track hoarded the leftover. */
-.imp-body { flex: 1; min-height: 0; display: grid; grid-template-columns: clamp(230px, 15vw, 300px) 1fr clamp(320px, 22vw, 420px); gap: 1px; background: var(--line); }
-.imp-roster, .imp-profile { background: var(--bg); overflow-y: auto; padding: var(--sp-4) 0; }
+/* Map-first. The panel used to be a table with a picture in the middle; now the
+   map IS the screen and everything else rides on it — identity as a HUD, the
+   eight measurements as a strip along the bottom, zone names printed where the
+   zones actually are. */
+.imp-cuts {
+    display: flex; align-items: center; gap: var(--sp-4); flex: none; flex-wrap: wrap;
+    padding: var(--sp-2) var(--sp-5); background: var(--surface-2);
+    border-bottom: 1px solid var(--line);
+}
+.imp-cut-grp { display: inline-flex; border: 1px solid var(--line-strong); }
+.imp-cut {
+    padding: 5px var(--sp-3); background: transparent; border: none;
+    font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: 1px;
+    text-transform: uppercase; color: var(--text-secondary); cursor: pointer; white-space: nowrap;
+    transition: color var(--t), background var(--t);
+}
+.imp-cut + .imp-cut { border-left: 1px solid var(--line-strong); }
+.imp-cut:hover { color: var(--paper-100); }
+.imp-cut.on { background: var(--accent); color: var(--accent-deep); }
+.imp-cut-n { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--text-muted); margin-left: auto; }
+.imp-cut-n.is-empty { color: var(--red); }
+
+.imp-body { flex: 1; min-height: 0; display: grid; grid-template-columns: clamp(220px, 15vw, 290px) 1fr; gap: 1px; background: var(--line); }
+.imp-roster { background: var(--bg); overflow-y: auto; padding: var(--sp-3) 0; }
+.imp-stage { position: relative; background: var(--bg); display: flex; align-items: center; justify-content: center; padding: var(--sp-3); min-width: 0; min-height: 0; overflow: hidden; }
+.imp-stage canvas { display: block; max-width: 100%; max-height: 100%; background: var(--radar-bg); border: 1px solid var(--line); }
+
+/* identity over the map, top-left, never wider than a readable measure */
+.imp-hud {
+    position: absolute; top: var(--sp-4); left: var(--sp-4); z-index: 2;
+    max-width: 320px; pointer-events: none;
+    background: rgba(10,9,7,0.82); border: 1px solid var(--line-strong);
+    border-left: 3px solid var(--accent); padding: var(--sp-3) var(--sp-4);
+}
+.imp-hud-empty { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--red); }
+.imp-hud-id { display: flex; align-items: center; gap: var(--sp-3); }
+.imp-hud-av {
+    width: 40px; height: 40px; flex: none; overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--surface-3); border: 1px solid var(--line);
+    font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: 600; color: var(--text-secondary);
+}
+.imp-hud-av img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.imp-hud-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.imp-hud-name {
+    display: flex; align-items: center; gap: var(--sp-2);
+    font-family: var(--font-body); font-weight: 600; font-size: var(--fs-md); color: var(--paper-100);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.imp-hud-lvl { width: 18px; height: 18px; flex: none; }
+.imp-hud-role {
+    font-family: var(--font-head); font-weight: 700; font-size: var(--fs-lg);
+    letter-spacing: var(--tr-head); text-transform: uppercase; color: var(--accent); line-height: 1.1;
+}
+.imp-hud-why { list-style: none; margin: var(--sp-3) 0 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.imp-hud-why li { position: relative; padding-left: var(--sp-3); font-size: var(--fs-xs); line-height: 1.5; color: var(--paper-300); }
+.imp-hud-why li::before { content: ''; position: absolute; left: 0; top: 0.55em; width: 4px; height: 4px; background: var(--accent-dim); }
+.imp-hud-foot {
+    display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
+    margin-top: var(--sp-3); padding-top: var(--sp-2); border-top: 1px solid var(--line);
+    font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--text-secondary);
+}
+
+/* the eight measurements, along the bottom of the map */
+.imp-strip {
+    position: absolute; left: var(--sp-3); right: var(--sp-3); bottom: var(--sp-3); z-index: 2;
+    display: grid; grid-template-columns: repeat(8, 1fr); gap: 1px;
+    background: var(--line); border: 1px solid var(--line-strong);
+}
+@media (max-width: 1240px) { .imp-strip { grid-template-columns: repeat(4, 1fr); } }
+.imp-cellm {
+    display: grid; grid-template-columns: 1fr auto; grid-template-rows: auto auto auto;
+    gap: 2px var(--sp-2); align-items: center;
+    background: rgba(10,9,7,0.90); padding: var(--sp-2) var(--sp-3); min-width: 0;
+}
+.imp-cellm-l {
+    grid-column: 1 / 3;
+    font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: 0.8px;
+    text-transform: uppercase; color: var(--text-secondary);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.imp-cellm-v { font-family: var(--font-mono); font-weight: 600; font-size: var(--fs-sm); color: var(--paper-100); font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* the standing was computed all along and never shown; a number without it says
+   nothing about whether it is good */
+.imp-cellm-r {
+    font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 600;
+    color: var(--text-secondary); border: 1px solid var(--line);
+    padding: 0 4px; white-space: nowrap;
+}
+.imp-cellm-r.is-top { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-wash); }
+.imp-cellm-bar { grid-column: 1 / 3; height: 4px; background: var(--surface-3); border: 1px solid var(--line); overflow: hidden; }
+.imp-cellm-bar i { display: block; height: 100%; background: var(--accent); }
+
+.imp-scale { position: absolute; top: var(--sp-4); right: var(--sp-4); z-index: 2; display: flex; align-items: center; gap: var(--sp-2); background: rgba(10,9,7,0.82); border: 1px solid var(--line-strong); padding: var(--sp-2) var(--sp-3); }
+.imp-roster { background: var(--bg); overflow-y: auto; padding: var(--sp-4) 0; }
+.imp-profile { background: var(--bg); overflow-y: auto; padding: var(--sp-3) 0 var(--sp-4); }
 .imp-roster-head, .imp-sec {
     font-family: var(--font-head); font-weight: 700; font-size: var(--fs-2xs); letter-spacing: var(--tr-micro);
     color: var(--text-secondary); padding: 0 var(--sp-4) var(--sp-2);
@@ -3245,17 +3339,25 @@ body::before { content: none; }
 .fk-msg { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); }
 .fk-msg.bad { color: var(--red); }
 
-.imp-stage { background: var(--bg); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 14px; min-width: 0; }
-.imp-stage canvas { display: block; max-width: 100%; max-height: calc(100vh - 130px); background: var(--radar-bg); border: 1px solid var(--line); }
-.imp-scale { display: flex; align-items: center; gap: 9px; }
-.imp-scale-lab { font-family: var(--font-mono); font-size: 9px; letter-spacing: 1.2px; color: var(--text-muted); }
-.imp-scale-bar { display: block; width: 190px; height: 5px; }
+/* min-height:0 + overflow:hidden or the canvas sets the row height instead of
+   the other way round, and the map pushes through the metric band below. */
+.imp-stage { background: var(--bg); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--sp-2); padding: var(--sp-3); min-width: 0; min-height: 0; overflow: hidden; }
+.imp-stage canvas { display: block; max-width: 100%; max-height: 100%; background: var(--radar-bg); border: 1px solid var(--line); }
+.imp-scale { display: flex; align-items: center; gap: var(--sp-3); }
+/* was 9px in --text-muted: thin and low-contrast on the map behind it */
+.imp-scale-lab {
+    font-family: var(--font-head); font-weight: 700; font-size: var(--fs-2xs);
+    letter-spacing: var(--tr-micro); text-transform: uppercase; color: var(--paper-100);
+    white-space: nowrap;
+}
+.imp-scale-bar { display: block; width: clamp(120px, 12vw, 200px); height: 9px; border: 1px solid var(--line-strong); }
 
 .imp-card { padding: 0 var(--sp-4) var(--sp-4); }
 .imp-card-name { font-family: var(--font-body); font-weight: 600; font-size: var(--fs-xl); color: var(--paper-100); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .imp-role {
-    display: inline-block; margin-top: var(--sp-2); padding: var(--sp-1) var(--sp-3); background: var(--accent);
-    color: var(--accent-deep); font-family: var(--font-head); font-weight: 700; font-size: var(--fs-sm); letter-spacing: 2px;
+    font-family: var(--font-head); font-weight: 700; font-size: var(--fs-lg);
+    letter-spacing: var(--tr-head); text-transform: uppercase; color: var(--accent);
+    padding: var(--sp-2) 0 0;
 }
 .imp-why { list-style: none; margin: var(--sp-3) 0 0; padding: 0; }
 .imp-why li { position: relative; padding-left: var(--sp-3); margin-top: var(--sp-2); font-family: var(--font-body); font-size: var(--fs-sm); line-height: 1.6; color: var(--text-secondary); }

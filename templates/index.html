@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CS2 Practice Server</title>
-    <link rel="stylesheet" href="/static/style.css?v=150">
+    <link rel="stylesheet" href="/static/style.css?v=156">
     <!-- Themes are disabled until 1.1.7. This ran before the stylesheet to avoid a
          flash of the wrong palette; with only dark shipping there is nothing to
          apply, and a stored rose/slate must NOT be honoured. Restore the original
@@ -292,7 +292,7 @@
                                         <button class="dv-launch" id="dvLaunch" style="display:none">LAUNCH SERVER</button>
                                         <button class="dv-impact" id="dvImpact" data-i18n="impact.btnTitle" data-i18n-attr="title" title="Positional analysis per side">
                                             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="square"><path d="M3 20V9M9 20V4M15 20v-7M21 20v-11"/></svg>
-                                            <span data-i18n="impact.btn">IMPACT</span><b>1.0</b>
+                                            <span data-i18n="impact.btn">IMPACT</span><b>1.4</b>
                                         </button>
                                         <button class="dv-floor" id="dvFloor" style="display:none">UPPER</button>
                                         <div class="dv-settings-wrap">
@@ -791,7 +791,7 @@
             </div>
         </div>
     </div>
-    <script src="/static/i18n.js?v=124"></script>
+    <script src="/static/i18n.js?v=125"></script>
     <script src="/static/script.js?v=92"></script>
     <script src="/static/skinpicker.js?v=103"></script>
     <script src="/static/binds.js?v=101"></script>
@@ -799,7 +799,7 @@
          the containing block for this panel's position:fixed and break the layout. -->
     <div class="imp" id="impPanel" hidden>
         <div class="imp-head">
-            <span class="imp-title">IMPACT<b>1.0</b></span>
+            <span class="imp-title">IMPACT<b>1.4</b></span>
             <span class="imp-sub" id="impSub"></span>
             <div class="imp-seg" id="impSide" role="radiogroup" aria-label="Side">
                 <button class="imp-seg-btn on" data-side="1" role="radio" aria-checked="true">CT</button>
@@ -807,21 +807,23 @@
             </div>
             <button class="imp-x" id="impClose" data-i18n="impact.close" data-i18n-attr="title" title="Close (Esc)">✕</button>
         </div>
+        <div class="imp-cuts" id="impCuts"></div>
         <div class="imp-body">
             <div class="imp-roster" id="impRoster"></div>
             <div class="imp-stage">
                 <canvas id="impCanvas" width="560" height="560"></canvas>
+                <div class="imp-hud" id="impHud"></div>
+                <div class="imp-strip" id="impMetrics"></div>
                 <div class="imp-scale">
                     <span class="imp-scale-lab" data-i18n="impact.timeSpent">TIME SPENT</span>
                     <i class="imp-scale-bar" id="impScaleBar"></i>
                     <span class="imp-scale-lab" data-i18n="impact.high">HIGH</span>
                 </div>
             </div>
-            <div class="imp-profile" id="impProfile"></div>
         </div>
     </div>
     <script src="/static/weapons.js?v=116"></script>
-    <script src="/static/impact.js?v=32"></script>
+    <script src="/static/impact.js?v=39"></script>
     <script src="/static/demo.js?v=98"></script>
     <script src="/static/statistics.js?v=118"></script>
     <script src="/static/advanced.js?v=118"></script>
