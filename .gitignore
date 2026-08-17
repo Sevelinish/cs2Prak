@@ -47,6 +47,10 @@ _databackup_*/
 _audit_backup_*/
 design_backup_*/
 
+# C# plugin build output (plugin/ sources are kept, artifacts are not)
+plugin/**/bin/
+plugin/**/obj/
+
 # OS / editor cruft
 Thumbs.db
 .DS_Store

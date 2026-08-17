@@ -3152,6 +3152,19 @@ body::before { content: none; }
     background: var(--bg);
 }
 .imp[hidden] { display: none; }
+/* Entrance is a CSS animation on the visible state, not a class the script has
+   to add: if the script never gets to run it, the failure is "no animation",
+   never "invisible panel". The exit still needs JS, because the element has to
+   stay in the layout until the transition ends. */
+/* transform only, never opacity: a stalled entrance would otherwise leave the
+   whole panel invisible, and 1.5% smaller is a harmless failure mode */
+@keyframes impIn { from { transform: scale(0.985); } to { transform: none; } }
+.imp:not([hidden]) { animation: impIn 0.16s ease; }
+.imp.is-closing { opacity: 0; transform: scale(0.99); transition: opacity .15s ease, transform .15s ease; }
+@media (prefers-reduced-motion: reduce) {
+    .imp:not([hidden]) { animation: none; }
+    .imp.is-closing { transition: none; }
+}
 .imp-head {
     display: flex; align-items: center; gap: var(--sp-4); flex: none;
     padding: 0 var(--sp-5); height: 60px; background: var(--surface);
@@ -3189,19 +3202,21 @@ body::before { content: none; }
 .imp-cut-grp { display: inline-flex; border: 1px solid var(--line-strong); }
 .imp-cut {
     padding: 5px var(--sp-3); background: transparent; border: none;
-    font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: 1px;
+    font-family: var(--font-head); font-weight: 700; font-size: var(--fs-2xs); letter-spacing: 1px;
     text-transform: uppercase; color: var(--text-secondary); cursor: pointer; white-space: nowrap;
     transition: color var(--t), background var(--t);
 }
 .imp-cut + .imp-cut { border-left: 1px solid var(--line-strong); }
 .imp-cut:hover { color: var(--paper-100); }
 .imp-cut.on { background: var(--accent); color: var(--accent-deep); }
-.imp-cut-n { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--text-muted); margin-left: auto; }
+.imp-cut-n { font-family: var(--font-mono); font-weight: 600; font-size: var(--fs-2xs); color: var(--paper-300); margin-left: auto; }
 .imp-cut-n.is-empty { color: var(--red); }
 
 .imp-body { flex: 1; min-height: 0; display: grid; grid-template-columns: clamp(220px, 15vw, 290px) 1fr; gap: 1px; background: var(--line); }
 .imp-roster { background: var(--bg); overflow-y: auto; padding: var(--sp-3) 0; }
-.imp-stage { position: relative; background: var(--bg); display: flex; align-items: center; justify-content: center; padding: var(--sp-3); min-width: 0; min-height: 0; overflow: hidden; }
+/* bottom padding reserves the strip's own height plus a gap, so the radar
+   stops where the strip starts instead of running under it */
+.imp-stage { position: relative; background: var(--bg); display: flex; align-items: center; justify-content: center; padding: var(--sp-3) var(--sp-3) 118px; min-width: 0; min-height: 0; overflow: hidden; }
 .imp-stage canvas { display: block; max-width: 100%; max-height: 100%; background: var(--radar-bg); border: 1px solid var(--line); }
 
 /* identity over the map, top-left, never wider than a readable measure */
@@ -3227,17 +3242,18 @@ body::before { content: none; }
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .imp-hud-lvl { width: 18px; height: 18px; flex: none; }
+.imp-hud-elo { font-family: var(--font-mono); font-weight: 600; font-size: var(--fs-2xs); letter-spacing: 1px; color: var(--accent); }
 .imp-hud-role {
     font-family: var(--font-head); font-weight: 700; font-size: var(--fs-lg);
     letter-spacing: var(--tr-head); text-transform: uppercase; color: var(--accent); line-height: 1.1;
 }
 .imp-hud-why { list-style: none; margin: var(--sp-3) 0 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
-.imp-hud-why li { position: relative; padding-left: var(--sp-3); font-size: var(--fs-xs); line-height: 1.5; color: var(--paper-300); }
+.imp-hud-why li { position: relative; padding-left: var(--sp-3); font-size: var(--fs-xs); font-weight: 500; line-height: 1.55; color: var(--paper-100); }
 .imp-hud-why li::before { content: ''; position: absolute; left: 0; top: 0.55em; width: 4px; height: 4px; background: var(--accent-dim); }
 .imp-hud-foot {
     display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
     margin-top: var(--sp-3); padding-top: var(--sp-2); border-top: 1px solid var(--line);
-    font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--text-secondary);
+    font-family: var(--font-mono); font-weight: 600; font-size: var(--fs-2xs); color: var(--paper-300);
 }
 
 /* the eight measurements, along the bottom of the map */
@@ -3249,26 +3265,90 @@ body::before { content: none; }
 @media (max-width: 1240px) { .imp-strip { grid-template-columns: repeat(4, 1fr); } }
 .imp-cellm {
     display: grid; grid-template-columns: 1fr auto; grid-template-rows: auto auto auto;
-    gap: 2px var(--sp-2); align-items: center;
-    background: rgba(10,9,7,0.90); padding: var(--sp-2) var(--sp-3); min-width: 0;
+    gap: 3px var(--sp-2); align-items: center;
+    background: rgba(10,9,7,0.92); padding: var(--sp-2) var(--sp-3); min-width: 0;
 }
 .imp-cellm-l {
     grid-column: 1 / 3;
-    font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: 0.8px;
-    text-transform: uppercase; color: var(--text-secondary);
+    font-family: var(--font-head); font-weight: 700; font-size: var(--fs-2xs);
+    letter-spacing: var(--tr-micro); text-transform: uppercase; color: var(--text-secondary);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.imp-cellm-v { font-family: var(--font-mono); font-weight: 600; font-size: var(--fs-sm); color: var(--paper-100); font-variant-numeric: tabular-nums; white-space: nowrap; }
-/* the standing was computed all along and never shown; a number without it says
-   nothing about whether it is good */
+/* The verdict carries the meaning now — "FAST" says in one word what 90px/s
+   never did, because px/s has no scale a reader carries in their head. */
+.imp-cellm-v {
+    font-family: var(--font-head); font-weight: 700; font-size: var(--fs-md);
+    letter-spacing: var(--tr-tight); text-transform: uppercase; color: var(--paper-100);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .imp-cellm-r {
-    font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 600;
+    font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700;
     color: var(--text-secondary); border: 1px solid var(--line);
     padding: 0 4px; white-space: nowrap;
 }
 .imp-cellm-r.is-top { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-wash); }
-.imp-cellm-bar { grid-column: 1 / 3; height: 4px; background: var(--surface-3); border: 1px solid var(--line); overflow: hidden; }
-.imp-cellm-bar i { display: block; height: 100%; background: var(--accent); }
+/* Three flat zones with hard stops, not a blend: with a gradient every value
+   read as its own shade and nothing was comparable at a glance. Now the
+   marker is plainly in the red, the yellow or the green third. The colour is position on the range, not a verdict —
+   "wide" is not worse than "tight", it is a different way to play. */
+.imp-cellm-bar {
+    grid-column: 1 / 3; position: relative; height: 7px;
+    background: linear-gradient(90deg, var(--red) 0 33.33%, #d9a441 33.33% 66.66%, var(--green) 66.66% 100%);
+    border: 1px solid var(--line);
+}
+.imp-cellm-bar i {
+    position: absolute; top: -3px; bottom: -3px; left: 0; width: 3px;
+    background: var(--paper-100); transform: translateX(-1px);
+    box-shadow: 0 0 0 1px rgba(10,9,7,0.85);
+}
+
+
+
+/* --- leaderboard for one measurement ------------------------------------
+   The strip answers "where does he sit"; this answers "who is best at it".
+   Rows are clickable, so a name spotted here becomes the selected player. */
+.imp-rank {
+    position: absolute; left: 50%; bottom: 128px; z-index: 6;
+    width: min(460px, calc(100% - 2 * var(--sp-5)));
+    background: rgba(10,9,7,0.95); border: 1px solid var(--line-strong);
+    border-top: 3px solid var(--accent); box-shadow: 0 18px 48px rgba(0,0,0,.6);
+    /* Visible at rest and animated in by a keyframe with no fill-mode: a
+       transition that never runs (throttled tab, reduced motion) would
+       otherwise leave the panel stuck at opacity 0 with no way to see it. */
+    transform: translateX(-50%);
+}
+.imp-rank.is-open { animation: impRankIn .16s cubic-bezier(.2,.7,.3,1); }
+/* transform only — a frozen animation then shows the panel slightly offset
+   rather than invisible, the same trap the main panel entrance hit */
+@keyframes impRankIn {
+    from { transform: translate(-50%, 10px) scale(0.98); }
+    to   { transform: translate(-50%, 0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) { .imp-rank.is-open { animation: none; } }
+.imp-rank-head { display: flex; align-items: baseline; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--line); }
+.imp-rank-t { font-family: var(--font-head); font-weight: 700; font-size: var(--fs-md); letter-spacing: var(--tr-head); text-transform: uppercase; color: var(--paper-100); }
+.imp-rank-sub { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--text-secondary); }
+.imp-rank-x { margin-left: auto; background: none; border: none; color: var(--text-muted); font-size: var(--fs-sm); line-height: 1; cursor: pointer; padding: 2px 4px; }
+.imp-rank-x:hover { color: var(--red); }
+.imp-rank-list { padding: var(--sp-2) 0 var(--sp-3); max-height: 46vh; overflow-y: auto; }
+.imp-rank-row {
+    display: grid; grid-template-columns: 2.2em minmax(0,1fr) auto;
+    grid-template-rows: auto auto; gap: 2px var(--sp-3);
+    align-items: center; padding: var(--sp-2) var(--sp-4); cursor: pointer;
+    border-left: 3px solid transparent; transition: background var(--t);
+}
+.imp-rank-row:hover { background: var(--surface-2); }
+.imp-rank-row.is-me { background: var(--accent-wash); border-left-color: var(--accent); }
+.imp-rank-n { grid-row: 1 / 3; font-family: var(--font-mono); font-weight: 700; font-size: var(--fs-md); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.imp-rank-row.is-me .imp-rank-n { color: var(--accent); }
+.imp-rank-name { font-family: var(--font-body); font-weight: 600; font-size: var(--fs-sm); color: var(--paper-100); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.imp-rank-band { font-family: var(--font-head); font-weight: 700; font-size: var(--fs-2xs); letter-spacing: var(--tr-micro); text-transform: uppercase; color: var(--text-secondary); white-space: nowrap; }
+.imp-rank-bar { grid-column: 2 / 4; position: relative; height: 6px; background: linear-gradient(90deg, var(--red) 0 33.33%, #d9a441 33.33% 66.66%, var(--green) 66.66% 100%); border: 1px solid var(--line); }
+.imp-rank-bar i { position: absolute; top: -3px; bottom: -3px; left: 0; width: 3px; background: var(--paper-100); transform: translateX(-1px); box-shadow: 0 0 0 1px rgba(10,9,7,0.85); }
+
+/* the cell is a button now */
+.imp-cellm { cursor: pointer; transition: background var(--t); }
+.imp-cellm:hover, .imp-cellm:focus-visible { background: rgba(30,27,22,0.95); outline: none; }
 
 .imp-scale { position: absolute; top: var(--sp-4); right: var(--sp-4); z-index: 2; display: flex; align-items: center; gap: var(--sp-2); background: rgba(10,9,7,0.82); border: 1px solid var(--line-strong); padding: var(--sp-2) var(--sp-3); }
 .imp-roster { background: var(--bg); overflow-y: auto; padding: var(--sp-4) 0; }
@@ -3341,7 +3421,6 @@ body::before { content: none; }
 
 /* min-height:0 + overflow:hidden or the canvas sets the row height instead of
    the other way round, and the map pushes through the metric band below. */
-.imp-stage { background: var(--bg); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--sp-2); padding: var(--sp-3); min-width: 0; min-height: 0; overflow: hidden; }
 .imp-stage canvas { display: block; max-width: 100%; max-height: 100%; background: var(--radar-bg); border: 1px solid var(--line); }
 .imp-scale { display: flex; align-items: center; gap: var(--sp-3); }
 /* was 9px in --text-muted: thin and low-contrast on the map behind it */

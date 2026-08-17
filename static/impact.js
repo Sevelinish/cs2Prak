@@ -621,7 +621,11 @@
         const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
         const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
         const legend = stage.querySelector('.imp-scale');
-        const legendH = legend ? legend.getBoundingClientRect().height + parseFloat(cs.rowGap || 12) : 0;
+        // rowGap reads back as "normal" when the stage sets no gap, and
+        // parseFloat('normal') is NaN — which then made canvas.width 0 and the
+        // map vanish. Fall back to a fixed gap instead of trusting the parse.
+        const gap = parseFloat(cs.rowGap);
+        const legendH = legend ? legend.getBoundingClientRect().height + (isFinite(gap) ? gap : 12) : 0;
         const box = stage.getBoundingClientRect();
         // floor was 520, which is taller than the stage row once the metric band
         // takes its share — the canvas then dictated the layout and overflowed
@@ -629,6 +633,7 @@
             Math.min(box.width - padX, box.height - padY - legendH))));
         if (s === canvas.width) return false;
         canvas.width = s; canvas.height = s;
+        heatKey = '';
         return true;
     }
 
@@ -637,6 +642,42 @@
     /* Zoom lives in canvas space: the map, the heat and the labels are all drawn
        through one transform, and annotation sizes are divided by the zoom so
        text and chips keep their on-screen size instead of ballooning. */
+
+    /* HLTV-style verdicts instead of raw units. Bands come from the rank WITHIN
+       the side, the only honest normaliser here: T-side roam runs about twice
+       CT-side on every map, so a fixed px cutoff would call a whole side "wide".
+       Sniper share is the exception because it has an absolute meaning — 12%
+       with an AWP is already a primary AWPer, which a relative band would bury
+       behind whoever happened to hold it more. */
+    const BANDS = {
+        spread:     ['impact.b.tight', 'impact.b.mid', 'impact.b.wide'],
+        discipline: ['impact.b.low', 'impact.b.mid', 'impact.b.high'],
+        isolation:  ['impact.b.paired', 'impact.b.mid', 'impact.b.lone'],
+        depth:      ['impact.b.shallow', 'impact.b.mid', 'impact.b.deep'],
+        repos:      ['impact.b.low', 'impact.b.mid', 'impact.b.high'],
+        pace:       ['impact.b.slow', 'impact.b.mid', 'impact.b.fast'],
+        duels:      ['impact.b.rare', 'impact.b.some', 'impact.b.often'],
+    };
+    /* One place that knows how each metric turns into a 0..1 position, so the
+       strip and the leaderboard can never disagree about where a player sits. */
+    const METRIC_FRAC = {
+        spread:     v => v.rank.roam,
+        discipline: v => 1 - v.rank.hold,
+        isolation:  v => v.rank.iso,
+        depth:      v => v.rank.depth,
+        repos:      v => v.moving,
+        pace:       v => v.rank.moving,
+        sniper:     v => Math.min(1, v.sniper * 4),
+        duels:      v => Math.min(1, v.rank.openRate),
+    };
+
+    const bandOf = (kind, frac) =>
+        T(BANDS[kind][frac < 0.34 ? 0 : (frac < 0.67 ? 1 : 2)]);
+    const sniperBand = share =>
+        T(share >= 0.12 ? 'impact.b.awpMain'
+          : (share > 0.02 ? 'impact.b.awpSome' : 'impact.b.awpNo'));
+
+    let heatLayer = null, heatKey = '';
     const view = { z: 1, x: 0, y: 0 };
     const ZMIN = 1, ZMAX = 6;
 
@@ -793,6 +834,7 @@
         radar.onload = draw;
         radar.onerror = () => { radar = null; draw(); };
         radar.src = '/static/radars/' + D.map + '.png';
+        panel.classList.remove('is-closing');
         panel.hidden = false;
         // after the panel is shown, or the stage measures 0
         sizeCanvas();
@@ -817,11 +859,15 @@
     window.addEventListener('resize', () => { if (!panel.hidden && sizeCanvas()) draw(); });
 
     function close() {
-        panel.hidden = true;
+        // let the exit transition finish before it leaves the layout
+        panel.classList.add('is-closing');
+        setTimeout(() => { panel.hidden = true; panel.classList.remove('is-closing'); }, 160);
         document.removeEventListener('keydown', onKey);
     }
 
     function onKey(e) {
+        if (e.key === 'Escape' && canvas.parentElement &&
+            canvas.parentElement.querySelector('.imp-rank.is-open')) { closeRank(); return; }
         if (e.key === 'Escape') { e.stopPropagation(); close(); }
     }
 
@@ -897,7 +943,10 @@
             '<span class="imp-row-time"></span></span>';
         row.querySelector('.imp-row-name').textContent = p.name || '?';
         row.querySelector('.imp-row-role').textContent = T('impact.role.' + v.role);
-        row.querySelector('.imp-row-time').textContent = Math.round(v.seconds) + 's';
+        // per round, same as the card: total time alive only tracked how many
+        // rounds the current cut covers, which the cut bar already states
+        row.querySelector('.imp-row-time').textContent =
+            (v.rounds ? Math.round(v.seconds / v.rounds) : 0) + 's';
         row.addEventListener('click', () => {
             sel = +id;
             roster.querySelectorAll('.imp-row').forEach(r => r.classList.remove('on'));
@@ -969,6 +1018,69 @@
     /* The map is the screen now. Identity sits on it as a HUD, the eight
        measurements run along the bottom as a strip, and the zones are labelled
        where they actually are instead of in a list beside the picture. */
+    /* Clicking a measurement asks "who is best at this?" — the strip answers it
+       for one player, this answers it for the whole side. Built from the same
+       METRIC_FRAC the strip uses, so the marker positions line up exactly. */
+    function openRank(key) {
+        const stage = canvas.parentElement;
+        if (!stage || !model || !model[side]) return;
+        const get = METRIC_FRAC[key];
+        if (!get) return;
+
+        const rows = Object.keys(model[side]).map(id => {
+            const v = model[side][id];
+            return { id: +id, v, frac: Math.max(0, Math.min(1, get(v) || 0)) };
+        }).sort((a, b) => b.frac - a.frac);
+
+        let box = stage.querySelector('.imp-rank');
+        if (!box) {
+            box = document.createElement('div');
+            box.className = 'imp-rank';
+            stage.appendChild(box);
+            box.addEventListener('click', e => {
+                if (e.target.closest('.imp-rank-x') || e.target === box) closeRank();
+            });
+        }
+        box.innerHTML =
+            '<div class="imp-rank-head">' +
+                '<span class="imp-rank-t">' + T('impact.m.' + key) + '</span>' +
+                '<span class="imp-rank-sub">' + T('impact.rank.sub') + '</span>' +
+                '<button class="imp-rank-x" type="button" aria-label="close">&#10005;</button>' +
+            '</div>' +
+            '<div class="imp-rank-list">' +
+            rows.map((r, i) => {
+                const band = key === 'sniper' ? sniperBand(r.v.sniper) : bandOf(key, r.frac);
+                return '<div class="imp-rank-row' + (r.id === sel ? ' is-me' : '') + '" data-id="' + r.id + '">' +
+                    '<span class="imp-rank-n">' + (i + 1) + '</span>' +
+                    '<span class="imp-rank-name">' + nameOf(r.id) + '</span>' +
+                    '<span class="imp-rank-band">' + band + '</span>' +
+                    '<span class="imp-rank-bar"><i style="left:' + (r.frac * 100).toFixed(1) + '%"></i></span>' +
+                '</div>';
+            }).join('') +
+            '</div>';
+
+        box.querySelectorAll('.imp-rank-row').forEach(rw => {
+            rw.addEventListener('click', () => {
+                sel = +rw.dataset.id;
+                roster.querySelectorAll('.imp-row').forEach(x => x.classList.remove('on'));
+                closeRank();
+                renderProfile(); draw();
+            });
+        });
+        // one frame at the start state, then the open class drives the transition
+        // restart the entrance even when the same cell is clicked twice
+        box.classList.remove('is-open');
+        void box.offsetWidth;
+        box.classList.add('is-open');
+    }
+
+    function closeRank() {
+        const box = canvas.parentElement && canvas.parentElement.querySelector('.imp-rank');
+        if (!box) return;
+        box.classList.remove('is-open');
+        setTimeout(() => { if (box && !box.classList.contains('is-open')) box.remove(); }, 160);
+    }
+
     function renderProfile() {
         const v = model[side][sel];
         const hud = document.getElementById('impHud');
@@ -995,21 +1107,24 @@
             ? '<span class="imp-hud-av has-img"><img src="' + fp.url + '" alt=""></span>'
             : '<span class="imp-hud-av">' + initials(nameOf(v.idx)) + '</span>';
         const lvl = fp && fp.lvl
-            ? '<img class="imp-hud-lvl" src="/static/faceit_levels/' + fp.lvl + '.png" alt="" title="FACEIT ' +
-              fp.lvl + (fp.elo ? ' · ' + fp.elo + ' ELO' : '') + '">'
+            ? '<img class="imp-hud-lvl" src="/static/faceit_levels/' + fp.lvl + '.png" alt="" title="FACEIT ' + fp.lvl + '">'
             : '';
+        const elo = fp && fp.elo
+            ? '<span class="imp-hud-elo">' + fp.elo.toLocaleString('en-US') + ' ELO</span>' : '';
 
         if (hud) hud.innerHTML =
             '<div class="imp-hud-id">' + av +
               '<span class="imp-hud-txt">' +
-                '<span class="imp-hud-name">' + nameOf(v.idx) + lvl + '</span>' +
+                '<span class="imp-hud-name">' + nameOf(v.idx) + lvl + '</span>' + elo +
                 '<span class="imp-hud-role">' + T('impact.role.' + v.role) + '</span>' +
               '</span>' +
             '</div>' +
             '<ul class="imp-hud-why">' +
               v.why.map(w => '<li>' + T(w[0], w[1]) + '</li>').join('') + '</ul>' +
             '<div class="imp-hud-foot">' +
-              '<span>' + Math.round(v.seconds) + 's ' + T('impact.live') + '</span>' +
+              // total time alive only tracked how many rounds the cut covers;
+              // per round it becomes a survival number worth reading
+              '<span>' + T('impact.avgLife', { s: v.rounds ? Math.round(v.seconds / v.rounds) : 0 }) + '</span>' +
               '<span class="imp-kd"><b>' + ICON.kill + v.kills + '</b>' +
                 '<b>' + ICON.death + v.deaths + '</b><u>' + kd + '</u></span>' +
             '</div>';
@@ -1018,27 +1133,45 @@
            standing itself is what turns a number into a judgement */
         const n5 = Object.keys(model[side]).length;
         const place = frac => Math.max(1, Math.round((1 - frac) * (n5 - 1)) + 1);
-        const cell = (label, frac, text, hint, lowIsFirst) => {
-            const pos = place(lowIsFirst ? 1 - frac : frac);
-            return '<div class="imp-cellm" title="' + (hint || '') + '">' +
+        // raw units are gone: px and px/s meant nothing without a scale in the
+        // reader's head, and the band plus the marker say it better
+        const cell = (label, frac, verdict, hint, key) => {
+            const pos = place(frac);
+            return '<div class="imp-cellm" role="button" tabindex="0" data-metric="' + key +
+                   '" title="' + (hint || '') + '">' +
                 '<span class="imp-cellm-l">' + label + '</span>' +
-                '<span class="imp-cellm-v">' + text + '</span>' +
-                '<span class="imp-cellm-bar"><i style="width:' +
-                    (Math.max(0, Math.min(1, frac)) * 100).toFixed(0) + '%"></i></span>' +
+                '<span class="imp-cellm-v">' + verdict + '</span>' +
                 '<span class="imp-cellm-r' + (pos === 1 ? ' is-top' : '') + '">#' + pos + '</span>' +
+                '<span class="imp-cellm-bar"><i style="left:' +
+                    (Math.max(0, Math.min(1, frac)) * 100).toFixed(1) + '%"></i></span>' +
             '</div>';
         };
 
         if (strip) strip.innerHTML =
-            cell(T('impact.m.spread'), r.roam, Math.round(v.roam) + 'px', T('impact.m.spreadH')) +
-            cell(T('impact.m.discipline'), 1 - r.hold, Math.round(v.spotHold) + 'px', T('impact.m.disciplineH')) +
-            cell(T('impact.m.isolation'), r.iso, Math.round(v.iso) + 'px', T('impact.m.isolationH')) +
-            cell(T('impact.m.depth'), r.depth, Math.round(v.depth) + 'px', T('impact.m.depthH')) +
-            cell(T('impact.m.repos'), v.moving, Math.round(v.moving * 100) + '%', T('impact.m.reposH')) +
-            cell(T('impact.m.pace'), r.moving, Math.round(v.speed) + 'px/s', T('impact.m.paceH')) +
-            cell(T('impact.m.sniper'), v.sniper, Math.round(v.sniper * 100) + '%', T('impact.m.sniperH')) +
+            cell(T('impact.m.spread'), r.roam,
+                 bandOf('spread', r.roam), T('impact.m.spreadH'), 'spread') +
+            cell(T('impact.m.discipline'), 1 - r.hold,
+                 bandOf('discipline', 1 - r.hold), T('impact.m.disciplineH'), 'discipline') +
+            cell(T('impact.m.isolation'), r.iso,
+                 bandOf('isolation', r.iso), T('impact.m.isolationH'), 'isolation') +
+            cell(T('impact.m.depth'), r.depth,
+                 bandOf('depth', r.depth), T('impact.m.depthH'), 'depth') +
+            cell(T('impact.m.repos'), v.moving,
+                 bandOf('repos', v.moving), T('impact.m.reposH'), 'repos') +
+            cell(T('impact.m.pace'), r.moving,
+                 bandOf('pace', r.moving), T('impact.m.paceH'), 'pace') +
+            cell(T('impact.m.sniper'), Math.min(1, v.sniper * 4),
+                 sniperBand(v.sniper), T('impact.m.sniperH'), 'sniper') +
             cell(T('impact.m.duels'), Math.min(1, r.openRate),
-                 v.openK + 'W ' + v.openD + 'L', T('impact.m.duelsH'));
+                 bandOf('duels', Math.min(1, r.openRate)), T('impact.m.duelsH'), 'duels');
+
+        strip.querySelectorAll('.imp-cellm[data-metric]').forEach(el => {
+            const go = () => openRank(el.dataset.metric);
+            el.addEventListener('click', go);
+            el.addEventListener('keydown', e => {
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); }
+            });
+        });
     }
 
     /* ------------------------------------------------------------ drawing */
@@ -1092,48 +1225,51 @@
 
         buildPlayMask();
         const S = W / (D.radarSize || 1024);
-        const G = v.gridN, g = v.grid;
-        let peak = 0;
-        for (let i = 0; i < g.length; i++) if (g[i] > peak) peak = g[i];
-        if (!peak) { ctx.restore(); return; }
-
-        // Heat, drawn at grid resolution then scaled up so the browser does the
-        // smoothing for us — the banded steps are what make it read like a
-        // football heat map rather than a fog.
-        const off = document.createElement('canvas');
-        off.width = G; off.height = G;
-        const octx = off.getContext('2d');
-        const img = octx.createImageData(G, G);
+        const G = v.gridN;
         const c = SIDE_COL[side];
-        for (let i = 0; i < g.length; i++) {
-            const t = g[i] / peak;
-            // Below this a cell is just transit — drawing it floods the map on
-            // T side, where players cover far more ground than on CT.
-            if (t <= 0.07) continue;
-            // gamma-lift the low end, then quantise into bands: the discrete
-            // steps are what make this read as a football heat map, not a blur
-            const band = Math.ceil(Math.pow(t, 0.62) * 5) / 5;
-            const [r, gg, b, a] = rampAt(side, band);
-            const p = i * 4;
-            img.data[p] = r; img.data[p + 1] = gg; img.data[p + 2] = b; img.data[p + 3] = a;
-        }
-        octx.putImageData(img, 0, 0);
 
-        // Blurring pushes occupancy past walls and off the map edge. The radar
-        // PNG is ~69% transparent outside the playable area, so using its alpha
-        // as a mask clips the spill back to where the map actually is.
-        const layer = document.createElement('canvas');
-        layer.width = W; layer.height = H;
-        const lctx = layer.getContext('2d');
-        lctx.imageSmoothingEnabled = true;
-        lctx.imageSmoothingQuality = 'high';
-        lctx.drawImage(off, 0, 0, W, H);
-        if (radar) {
-            lctx.globalCompositeOperation = 'destination-in';
-            lctx.drawImage(radar, 0, 0, W, H);
-            lctx.globalCompositeOperation = 'source-over';
+        /* The heat used to be rebuilt on every paint: a 64x64 ImageData pass, an
+           upscale and a mask composite. Fine once, ruinous on a wheel zoom that
+           repaints on each tick. Nothing about the heat depends on the view, so
+           it is baked once per (player, side, cut, size) and then just blitted. */
+        const hk = side + ':' + sel + ':' + cutKey() + ':' + W;
+        if (heatKey !== hk) {
+            heatKey = hk;
+            heatLayer = null;
+            const g = v.grid;
+            let peak = 0;
+            for (let q = 0; q < g.length; q++) if (g[q] > peak) peak = g[q];
+            if (peak) {
+                const off = document.createElement('canvas');
+                off.width = G; off.height = G;
+                const octx = off.getContext('2d');
+                const img = octx.createImageData(G, G);
+                for (let q = 0; q < g.length; q++) {
+                    const t = g[q] / peak;
+                    if (t <= 0.07) continue;
+                    const band = Math.ceil(Math.pow(t, 0.62) * 5) / 5;
+                    const [rr, gg, bb, aa] = rampAt(side, band);
+                    const p = q * 4;
+                    img.data[p] = rr; img.data[p + 1] = gg; img.data[p + 2] = bb; img.data[p + 3] = aa;
+                }
+                octx.putImageData(img, 0, 0);
+
+                const layer = document.createElement('canvas');
+                layer.width = W; layer.height = H;
+                const lctx = layer.getContext('2d');
+                lctx.imageSmoothingEnabled = true;
+                lctx.imageSmoothingQuality = 'high';
+                lctx.drawImage(off, 0, 0, W, H);
+                if (radar) {
+                    lctx.globalCompositeOperation = 'destination-in';
+                    lctx.drawImage(radar, 0, 0, W, H);
+                    lctx.globalCompositeOperation = 'source-over';
+                }
+                heatLayer = layer;
+            }
         }
-        ctx.drawImage(layer, 0, 0);
+        if (!heatLayer) { ctx.restore(); return; }
+        ctx.drawImage(heatLayer, 0, 0);
 
         const col = `rgb(${c[0]},${c[1]},${c[2]})`;
 
