@@ -52,12 +52,30 @@ def _lower_priority():
 
 _lower_priority()
 
+_BUNDLE = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+_TRAY_PNG = os.path.join(_BUNDLE, 'static', 'tray_icon.png')
+
 def _make_icon() -> Image.Image:
-    """Signal-orange power/standby glyph on transparency — the same mark as the
-    .exe icon, simplified for the tray: no tile, heavier stroke and a wide top
-    gap so the open ring stays legible at ~16px on any taskbar colour.
-    Drawn at 64px (the OS resizes it down) and returned as a PIL image, which
-    pystray requires."""
+    """Tray mark: grey frame, signal-orange play triangle — the same simplified mark
+    icon.ico carries at its small sizes, loaded from static/tray_icon.png so the
+    tray, the taskbar and the shortcut can never drift apart.
+
+    The PNG is 32px on purpose and is handed to pystray unscaled: the notification
+    area draws at 16-24px depending on DPI, and 32 is the shortest way down. The
+    detailed artwork is deliberately not used here — its strip cut-outs collapse
+    into grey mush below ~32px, and that is the only range the tray ever shows.
+
+    If the PNG is missing from the bundle the tray still gets an icon, drawn below."""
+    try:
+        with Image.open(_TRAY_PNG) as img:
+            return img.convert('RGBA')
+    except OSError:
+        return _fallback_icon()
+
+def _fallback_icon() -> Image.Image:
+    """The mark the tray used before the artwork moved to a PNG: a signal-orange
+    power/standby glyph on transparency, no tile, heavy stroke and a wide top gap
+    so the open ring stays legible at ~16px on any taskbar colour."""
     import math
     signal = (0xff, 0x6a, 0x1f, 255)
 
