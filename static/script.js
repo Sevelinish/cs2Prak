@@ -1445,5 +1445,135 @@ pmBackdrop.addEventListener('click', e => { if (e.target === pmBackdrop) pmBackd
             }
         }).catch(() => { setTimeout(poll, 8000); });
     }
-    poll();   
+    poll();
+})();
+
+(function initUninstall() {
+    const card = document.getElementById('uninstallCard');
+    if (!card) return;
+    const startBtn = document.getElementById('uninstStart');
+    const step1  = document.getElementById('uninstStep1');
+    const step2  = document.getElementById('uninstStep2');
+    const list   = document.getElementById('uninstList');
+    const total  = document.getElementById('uninstTotal');
+    const prompt = document.getElementById('uninstPrompt');
+    const input  = document.getElementById('uninstInput');
+    const go     = document.getElementById('uninstGo');
+    const logEl  = document.getElementById('uninstLog');
+    const msg    = document.getElementById('uninstMsg');
+
+    let preview = null;
+    let msgKey  = '';       // the key, not the text — langchange has to re-translate it
+    let running = false;
+
+    const size = b => b >= 1073741824 ? (b / 1073741824).toFixed(2) + ' GB'
+                    : b >= 1048576    ? (b / 1048576).toFixed(1) + ' MB'
+                    : b >= 1024       ? Math.round(b / 1024) + ' KB'
+                    : b + ' B';
+    // the last two segments identify the target; the full path goes in title=
+    const tail = p => p.split(/[\\/]/).slice(-2).join('\\');
+
+    function note(key, bad) {
+        msgKey = key || '';
+        msg.textContent = msgKey ? t(msgKey) : '';
+        msg.classList.toggle('bad', !!bad);
+    }
+
+    function render() {
+        if (!preview || !preview.items) return;
+        list.innerHTML = '';
+        // nested entries sit inside a folder already listed above them
+        preview.items.filter(i => !i.nested).forEach(i => {
+            const row = document.createElement('div');
+            row.className = 'unin-item' + (i.exists ? '' : ' gone');
+            row.title = i.path;
+            const label = document.createElement('i');
+            label.textContent = t('uninst.i.' + i.key);
+            const path = document.createElement('s');
+            path.textContent = tail(i.path);
+            const sz = document.createElement('b');
+            sz.textContent = i.exists ? size(i.size) : t('uninst.absent');
+            row.append(label, path, sz);
+            list.appendChild(row);
+        });
+        total.textContent = size(preview.total || 0);
+        prompt.textContent = '';
+        t('uninst.type').split('{w}').forEach((part, n) => {
+            if (n) {
+                const w = document.createElement('b');
+                w.textContent = t('uninst.word');
+                prompt.appendChild(w);
+            }
+            prompt.appendChild(document.createTextNode(part));
+        });
+        input.placeholder = t('uninst.word');
+        if (msgKey) msg.textContent = t(msgKey);
+    }
+
+    function validate() {
+        go.disabled = running ||
+            input.value.trim().toUpperCase() !== t('uninst.word').toUpperCase();
+    }
+
+    function show(step) {
+        startBtn.hidden = step !== 0;
+        step1.hidden = step !== 1;
+        step2.hidden = step !== 2;
+    }
+
+    startBtn.addEventListener('click', () => {
+        startBtn.disabled = true;
+        note('uninst.loading');
+        fetch('/api/uninstall/preview').then(r => r.json()).then(p => {
+            preview = p;
+            if (!p || !p.ok) {
+                note('');
+                msg.textContent = (p && p.blocked) || t('uninst.failed');
+                msg.classList.add('bad');
+                return;
+            }
+            render(); validate(); show(1); note('');
+        }).catch(() => note('uninst.noBackend', true))
+          .finally(() => { startBtn.disabled = false; });
+    });
+
+    document.getElementById('uninstNext').addEventListener('click', () => {
+        show(2); input.value = ''; validate(); input.focus();
+    });
+    [document.getElementById('uninstCancel1'),
+     document.getElementById('uninstCancel2')].forEach(b => {
+        b.addEventListener('click', () => { preview = null; show(0); note(''); });
+    });
+
+    input.addEventListener('input', validate);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') go.click(); });
+
+    go.addEventListener('click', () => {
+        if (go.disabled || !preview) return;
+        running = true; validate();
+        note('uninst.working');
+        logEl.hidden = false; logEl.textContent = '';
+        fetch('/api/uninstall', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ confirm: preview.confirm }),
+        }).then(r => r.json()).then(j => {
+            if (j && j.ok) { poll(); return; }
+            running = false; validate();
+            note('uninst.failed', true);
+            if (j && j.message) logEl.textContent = j.message;
+        }).catch(() => { running = false; validate(); note('uninst.noBackend', true); });
+    });
+
+    function poll() {
+        fetch('/api/uninstall/status').then(r => r.json()).then(s => {
+            if (!s) return;
+            logEl.textContent = (s.log || []).join('\n');
+            logEl.scrollTop = logEl.scrollHeight;
+            if (s.running) { setTimeout(poll, 700); return; }
+            if (s.error) { running = false; validate(); note('uninst.failed', true); return; }
+            note('uninst.closing');
+        }).catch(() => note('uninst.closing'));   // backend gone means it worked
+    }
+
+    document.addEventListener('langchange', () => { render(); validate(); });
 })();

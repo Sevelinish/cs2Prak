@@ -265,19 +265,37 @@
     /** Plain-language tags derived only from thresholds on measured values —
      *  no scoring, no invented composite. Each one is a thing a scout would
      *  actually write down after watching him. */
+    /* A metric is only worth a verdict when it was measured often enough to mean
+       anything. Crosshair placement in particular is now only sampled in duels
+       where contact was actually observed, so its count runs well below the duel
+       count and has to be checked on its own. */
+    var MIN_N = { react: 15, cross: 15, cs: 20, fb: 20, hs: 20, dist: 15 };
+
     function verdictTags(a) {
         var out = [];
-        if (a.reactMed != null && a.reactMed <= 250) out.push(['good', 'av.tag.fastReact']);
-        else if (a.reactMed != null && a.reactMed >= 450) out.push(['bad', 'av.tag.slowReact']);
-        if (a.crossMed != null && a.crossMed <= 8) out.push(['good', 'av.tag.tightCross']);
-        else if (a.crossMed != null && a.crossMed >= 30) out.push(['bad', 'av.tag.looseCross']);
-        if (a.csPct >= 70) out.push(['good', 'av.tag.stops']);
-        else if (a.csPct > 0 && a.csPct <= 35) out.push(['bad', 'av.tag.runs']);
-        if (a.firstBulletPct >= 45) out.push(['good', 'av.tag.firstBullet']);
-        if (a.hsPct >= 60) out.push(['good', 'av.tag.headshots']);
-        if (a.avgDist != null && a.avgDist >= 20) out.push(['', 'av.tag.longRange']);
-        else if (a.avgDist != null && a.avgDist <= 10) out.push(['', 'av.tag.closeRange']);
-        if ((a.flashedLost || 0) >= 3) out.push(['bad', 'av.tag.blindDeaths']);
+        if (a.reactMed != null && (a.reactN || 0) >= MIN_N.react) {
+            if (a.reactMed <= 250) out.push(['good', 'av.tag.fastReact']);
+            else if (a.reactMed >= 450) out.push(['bad', 'av.tag.slowReact']);
+        }
+        if (a.crossMed != null && (a.crossN || 0) >= MIN_N.cross) {
+            if (a.crossMed <= 8) out.push(['good', 'av.tag.tightCross']);
+            else if (a.crossMed >= 30) out.push(['bad', 'av.tag.looseCross']);
+        }
+        if ((a.csN || 0) >= MIN_N.cs) {
+            if (a.csPct >= 70) out.push(['good', 'av.tag.stops']);
+            else if (a.csPct > 0 && a.csPct <= 35) out.push(['bad', 'av.tag.runs']);
+        }
+        if ((a.fbN || 0) >= MIN_N.fb && a.firstBulletPct >= 45) out.push(['good', 'av.tag.firstBullet']);
+        if ((a.won || 0) >= MIN_N.hs && a.hsPct >= 60) out.push(['good', 'av.tag.headshots']);
+        // Metres, not the hundredths of a unit this used to compare against: a
+        // hammer unit is an inch, so every distance here is 2.54x what it was.
+        if (a.avgDist != null && (a.distN || 0) >= MIN_N.dist) {
+            if (a.avgDist >= 32) out.push(['', 'av.tag.longRange']);
+            else if (a.avgDist <= 15) out.push(['', 'av.tag.closeRange']);
+        }
+        // As a share of the duels he lost, so 3 of 15 does not read like 3 of 40.
+        if ((a.lost || 0) >= 15 && (a.flashedLost || 0) / a.lost >= 0.2)
+            out.push(['bad', 'av.tag.blindDeaths']);
         return out;
     }
 
@@ -484,8 +502,8 @@
                       histo(reactPairs, [150, 250, 350, 450, 600],
                             ['<150', '150–250', '250–350', '350–450', '450–600', '600+'])) +
                 block('av.b.dist.t', 'av.b.dist.why',
-                      histo(distPairs, [5, 8, 12, 16, 22],
-                            ['<5', '5–8', '8–12', '12–16', '16–22', '22+'])) +
+                      histo(distPairs, [12, 20, 30, 40, 55],
+                            ['<12', '12–20', '20–30', '30–40', '40–55', '55+'])) +
             '</div>' +
             duelsSection();
 

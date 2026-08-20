@@ -56,3 +56,33 @@ Thumbs.db
 .DS_Store
 .idea/
 .vscode/
+
+# Working notes: TODO lists, reminders, command crib sheets, half-finished
+# drafts. Useful next to the code, worthless in the history — they read as
+# noise in a diff, go stale within a week and leak whatever was on your mind.
+NOTES.md
+TODO.md
+notes/
+scratch/
+drafts/
+*_notes.md
+*.notes.md
+*.draft.md
+*.scratch.*
+cheatsheet*
+шпаргалка*
+заметки*
+
+# The release walkthrough — a crib sheet for whoever runs the build, removed
+# from the repo in c95cd91. Recover it with:
+#   git show 4e27e37:RELEASING.md > RELEASING.md
+RELEASING.md
+
+# Icon builder: renders icon.svg into icon.ico. Belongs to the machine that
+# builds, not to the product, same as make_release.py above. Recover it with:
+#   git show e5e6f05:svg2ico.ps1 > svg2ico.ps1
+svg2ico.ps1
+
+# Agent/editor local state. The whole folder: agent worktrees are checked out
+# into .claude/worktrees/ and that is a second copy of the repo inside the repo.
+.claude/

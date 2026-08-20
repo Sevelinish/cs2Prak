@@ -3532,6 +3532,32 @@ body::before { content: none; }
 .set-card-fk .fk-head { margin: 0; }
 .set-card-fk .fk-state { margin-left: 0; }
 
+/* Uninstall — the one card that must not read like the rest of Settings, so the
+   border and both buttons carry --red instead of the usual accent. Everything
+   else (layout, inputs, rows) is the standard .set-card / .fk-row kit. */
+.set-card-danger { border-color: color-mix(in srgb, var(--red) 40%, var(--line)); }
+.set-card-danger .set-card-title { color: var(--red); }
+.unin-danger { border-color: color-mix(in srgb, var(--red) 55%, transparent); color: var(--red); }
+.unin-danger:hover:not(:disabled) { border-color: var(--red); color: var(--red-hover); background: color-mix(in srgb, var(--red) 12%, transparent); }
+.unin-danger-solid { background: var(--red); border-color: var(--red); color: var(--paper-100); }
+.unin-step { display: flex; flex-direction: column; gap: 10px; }
+.unin-step[hidden] { display: none; }
+.unin-list { display: flex; flex-direction: column; border: 1px solid var(--line); max-height: 260px; overflow-y: auto; }
+.unin-item { display: flex; align-items: baseline; gap: 10px; padding: 5px 9px; font-family: var(--font-mono); font-size: 10.5px; border-bottom: 1px solid var(--line); }
+.unin-item:last-child { border-bottom: none; }
+.unin-item.gone { opacity: 0.4; }
+.unin-item i { font-style: normal; color: var(--text-secondary); }
+/* JS puts the tail of the path here and the whole thing in title= — seeing the
+   real folder is what makes this dialog trustworthy */
+.unin-item s { flex: 1; min-width: 0; text-decoration: none; color: var(--text-muted); font-size: 9.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.unin-item b { margin-left: auto; color: var(--paper-100); font-weight: 600; }
+.unin-total { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); }
+.unin-total b { color: var(--red); font-size: 13px; }
+.unin-prompt { margin: 0; font-family: var(--font-body); font-size: 11.5px; line-height: 1.5; color: var(--text-secondary); }
+.unin-prompt b { color: var(--red); font-family: var(--font-mono); letter-spacing: 1px; }
+.unin-log { margin: 0; padding: 8px 9px; max-height: 180px; overflow-y: auto; background: var(--bg); border: 1px solid var(--line); font-family: var(--font-mono); font-size: 10px; line-height: 1.5; color: var(--text-secondary); white-space: pre-wrap; word-break: break-all; }
+.unin-log[hidden] { display: none; }
+
 /* Impact: exact FACEIT standing + what the units mean */
 .imp-card-faceit { display: flex; align-items: center; gap: 7px; margin-top: 8px; }
 .imp-card-faceit img { width: 22px; height: 22px; display: block; }

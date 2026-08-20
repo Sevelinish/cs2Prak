@@ -34,7 +34,7 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 with open(os.path.join(_RADAR_DIR, 'calibration.json'), encoding='utf-8') as _f:
     CALIB = json.load(_f)
 
-_CACHE_VER = 'v14-aim'
+_CACHE_VER = 'v15-bounce'
 
 def cache_key(path):
     st  = os.stat(path)
@@ -119,6 +119,7 @@ def analyze_player(dem_path, steamid):
     dd = _ev(evs, 'player_death')
     duels = []
     if dd is not None:
+        dcols = dd.columns
         for _, r in dd.iterrows():
             tk = int(r['tick'])
             if tk < match_start:
@@ -126,10 +127,18 @@ def analyze_player(dem_path, steamid):
             a, v = str(r.get('attacker_steamid')), str(r.get('user_steamid'))
             if steamid not in (a, v) or a == v:
                 continue
+            # The engine reports the attacker-to-victim distance itself, already
+            # in metres. Preferred over measuring it here: no unit to get wrong
+            # and no dependence on both players having a usable frame.
+            gd = r.get('distance') if 'distance' in dcols else None
+            try:
+                gd = round(float(gd), 1) if gd == gd and gd is not None else None
+            except (TypeError, ValueError):
+                gd = None
             won = (a == steamid)
             duels.append({'tick': tk, 'won': won, 'opp': (v if won else a),
                           'weapon': str(r.get('weapon') or '').replace('weapon_', ''),
-                          'hs': bool(r.get('headshot'))})
+                          'hs': bool(r.get('headshot')), 'gdist': gd})
     if not duels:
         return {'ok': True, 'map': mapname, 'steamid': steamid,
                 'name': names.get(steamid, '?'), 'duels': [], 'agg': {}}
@@ -137,17 +146,22 @@ def analyze_player(dem_path, steamid):
     WIN = int(TICKRATE * 2.5)
     want = set()
     for d in duels:
-        want.update(range(max(0, d['tick'] - WIN), d['tick'] + 1))
-    td = parser.parse_ticks(
-        ['X', 'Y', 'Z', 'yaw', 'pitch', 'spotted', 'flash_duration', 'health'],
-        ticks=sorted(want))
-    C = {c: td[c].to_numpy() for c in
-         ('steamid', 'tick', 'X', 'Y', 'Z', 'yaw', 'pitch', 'spotted', 'flash_duration', 'health')}
+        # Two ticks before the window so the counter-strafe can look one tick
+        # back from the opening shot, and past the death because that shot may
+        # land a few ticks after it.
+        want.update(range(max(0, d['tick'] - WIN - 2), d['tick'] + 8))
+    _props = ['X', 'Y', 'Z', 'yaw', 'pitch', 'spotted', 'flash_duration', 'health', 'team_num']
+    td = parser.parse_ticks(_props, ticks=sorted(want))
+    # A demo that does not carry one of these must degrade to "unmeasured", not
+    # take the whole tab down with a KeyError.
+    _nan = [float('nan')] * len(td)
+    C = {c: (td[c].to_numpy() if c in td.columns else _nan)
+         for c in ['steamid', 'tick'] + _props}
     P = {}
     for i in range(len(C['tick'])):
         P[(str(C['steamid'][i]), int(C['tick'][i]))] = (
             C['X'][i], C['Y'][i], C['Z'][i], C['yaw'][i], C['pitch'][i],
-            C['spotted'][i], C['flash_duration'][i], C['health'][i])
+            C['spotted'][i], C['flash_duration'][i], C['health'][i], C['team_num'][i])
 
     wf = _ev(evs, 'weapon_fire')
     myshots = sorted(int(r['tick']) for _, r in wf.iterrows()
@@ -156,17 +170,24 @@ def analyze_player(dem_path, steamid):
                                  for x in ('grenade', 'flash', 'molotov', 'decoy', 'knife', 'bayonet'))) if wf is not None else []
     from collections import defaultdict
     ph = _ev(evs, 'player_hurt')
-    myhits = set()
-    myhits_vs = defaultdict(list)
+    # Damage this player dealt, per victim. Utility is excluded: a molotov thrown
+    # a minute earlier ticking on the opponent is neither a reaction nor a bullet,
+    # and counting it stopped the reaction clock at times no human produced.
+    myhits_vs = defaultdict(set)
     if ph is not None:
+        hcols = ph.columns
         for _, r in ph.iterrows():
-            if str(r.get('attacker_steamid')) == steamid:
-                t = int(r['tick']); myhits.add(t)
-                myhits_vs[str(r.get('user_steamid'))].append(t)
-        for k in myhits_vs:
-            myhits_vs[k].sort()
+            if str(r.get('attacker_steamid')) != steamid:
+                continue
+            w = str(r.get('weapon') or '') if 'weapon' in hcols else ''
+            if any(u in w for u in _UTIL_W):
+                continue
+            myhits_vs[str(r.get('user_steamid'))].add(int(r['tick']))
 
     D2R = math.pi / 180.0
+    # 1 hammer unit = 1 inch. Checked against the engine's own player_death
+    # distance field, which matches this factor and not the 1/100 used before.
+    _U2M = 0.0254
 
     def aim_vec(yaw, pit):
         cp = math.cos(pit * D2R)
@@ -175,10 +196,15 @@ def analyze_player(dem_path, steamid):
     out = []
     for d in duels:
         tk, opp = d['tick'], d['opp']
+        if not opp.isdigit() or opp == '0':
+            continue                    # fall damage or a world kill: no opponent
         me = P.get((steamid, tk)); en = P.get((opp, tk))
-        dist = None
-        if me and en and me[0] == me[0] and en[0] == en[0]:
-            dist = round(math.dist((me[0], me[1], me[2]), (en[0], en[1], en[2])) / 100.0, 1)
+        if (me and en and me[8] == me[8] and en[8] == en[8]
+                and int(me[8]) == int(en[8])):
+            continue                    # same side: a team-kill is not a duel
+        dist = d.get('gdist')
+        if dist is None and me and en and me[0] == me[0] and en[0] == en[0]:
+            dist = round(math.dist((me[0], me[1], me[2]), (en[0], en[1], en[2])) * _U2M, 1)
         appear = None; prev = None
         for t in range(max(0, tk - WIN), tk + 1):
             cur = P.get((opp, t))
@@ -190,35 +216,60 @@ def analyze_player(dem_path, steamid):
                 if t - last_shot >= TICKRATE * 0.25:
                     appear = t; break
             prev = sp
-        start = appear if appear is not None else max(0, tk - WIN)
+        hits_opp = sorted(myhits_vs.get(opp, ()))
         react = None
         if appear is not None:
-            h = next((t for t in myhits_vs.get(opp, []) if appear <= t <= tk + 6), None)
+            h = next((t for t in hits_opp if appear <= t <= tk + 6), None)
             if h is not None:
                 rt = (h - appear) / TICKRATE
-                if 0.05 <= rt <= 1.5:
+                # 3 s matches the clamp the Statistics tab uses. The old 1.5 s
+                # ceiling threw away every slow reaction, which is exactly the
+                # tail a "slow to react" verdict is supposed to see.
+                if 0.05 <= rt <= 3.0:
                     react = round(rt * 1000)
+        # Crosshair placement, being blinded and HP are only meaningful at the
+        # instant contact was made. Where that instant is unknown they are left
+        # unmeasured rather than sampled 2.5 s before the death, which used to
+        # mix an unrelated moment of the round into the averages — and did it
+        # more often in lost duels, biasing the very comparison this tab makes.
         cross = None
-        ref = P.get((steamid, start)); eno = P.get((opp, start))
+        ref = P.get((steamid, appear)) if appear is not None else None
+        eno = P.get((opp, appear)) if appear is not None else None
         if ref and eno and ref[0] == ref[0] and eno[0] == eno[0]:
             av = aim_vec(ref[3], ref[4])
-            dx, dy, dz = eno[0] - ref[0], eno[1] - ref[1], (eno[2] + 64) - (ref[2] + 64)
+            dx, dy, dz = eno[0] - ref[0], eno[1] - ref[1], eno[2] - ref[2]
             mag = math.sqrt(dx * dx + dy * dy + dz * dz)
             if mag > 1:
                 dot = (av[0] * dx + av[1] * dy + av[2] * dz) / mag
                 cross = round(math.degrees(math.acos(max(-1.0, min(1.0, dot)))), 1)
+        # The opening shot of the burst that resolves this duel. Anchoring on the
+        # player's own fire needs no visibility data, so it stays defined in the
+        # duels where contact was never observed — most of the lost ones.
+        fsh = None
+        prior = [t for t in myshots if t <= tk + 6]
+        if prior and tk - prior[-1] <= TICKRATE * 1.5:
+            i = len(prior) - 1
+            while i > 0 and prior[i] - prior[i - 1] <= TICKRATE // 2:
+                i -= 1
+            fsh = prior[i]
         fb = None
-        fsh = next((t for t in myshots if start <= t <= tk + 6), None)
         if fsh is not None:
-            fb = (fsh in myhits) or (fsh + 1 in myhits) or (fsh - 1 in myhits)
+            # Against this opponent only. Testing "did he damage anybody on that
+            # tick" credited a miss whenever a second enemy, a team-mate or a
+            # molotov happened to take damage at the same moment.
+            fb = (fsh in myhits_vs.get(opp, ())) or (fsh + 1 in myhits_vs.get(opp, ()))
         cs = None
         if fsh is not None:
-            a8 = P.get((steamid, fsh)); b8 = P.get((steamid, fsh - 8))
-            if a8 and b8 and a8[0] == a8[0] and b8[0] == b8[0]:
-                spd = math.hypot(a8[0] - b8[0], a8[1] - b8[1]) / (8 / TICKRATE)
+            a1 = P.get((steamid, fsh)); b1 = P.get((steamid, fsh - 1))
+            if a1 and b1 and a1[0] == a1[0] and b1[0] == b1[0]:
+                # One tick of travel, not eight. Averaged over 125 ms a player who
+                # was still moving reads as stopped; the velocity props cannot be
+                # used here because demoparser2 derives them from the requested
+                # tick list and this call requests a sparse one.
+                spd = math.hypot(a1[0] - b1[0], a1[1] - b1[1]) * TICKRATE
                 cs = spd < 55
         flashed = False
-        rs = P.get((steamid, start))
+        rs = P.get((steamid, appear)) if appear is not None else None
         if rs and rs[6] == rs[6] and float(rs[6]) > 1.0:
             flashed = True
         hp = None
@@ -251,10 +302,22 @@ def analyze_player(dem_path, steamid):
     lost = [d for d in out if not d['won']]
 
     def _med(a):
-        a = sorted(a); return a[len(a) // 2] if a else None
+        """True median. Returning the upper of the two middle values, as this did,
+        skews small samples upward — and the lost-duel buckets, which are the
+        smallest, hardest of all."""
+        a = sorted(a)
+        n = len(a)
+        if not n:
+            return None
+        if n % 2:
+            return a[n // 2]
+        return round((a[n // 2 - 1] + a[n // 2]) / 2, 1)
 
     def med_of(key, subset):
         return _med([d[key] for d in subset if d[key] is not None])
+
+    def n_of(key, subset):
+        return sum(1 for d in subset if d[key] is not None)
 
     def pct_true(key, subset):
         v = [d[key] for d in subset if d[key] is not None]
@@ -270,8 +333,17 @@ def analyze_player(dem_path, steamid):
         'fbWonPct': pct_true('firstBullet', won), 'fbLostPct': pct_true('firstBullet', lost),
         'csPct': pct_true('cs', out) or 0, 'csWon': pct_true('cs', won), 'csLost': pct_true('cs', lost),
         'hsPct': round(sum(1 for d in won if d['hs']) / len(won) * 100) if won else 0,
-        'avgDist': round(sum(dists) / len(dists), 1) if dists else None,
+        'avgDist': _med(dists),
         'flashedLost': sum(1 for d in lost if d['flashed']),
+        # How many duels each number actually rests on. Without these the panel
+        # cannot tell a median of twenty from a median of three, and the split
+        # bars were reporting the count of all duels regardless of what they
+        # themselves measured.
+        'reactN': n_of('react', out), 'reactWonN': n_of('react', won), 'reactLostN': n_of('react', lost),
+        'crossN': n_of('cross', out), 'crossWonN': n_of('cross', won), 'crossLostN': n_of('cross', lost),
+        'fbN': n_of('firstBullet', out), 'fbWonN': n_of('firstBullet', won), 'fbLostN': n_of('firstBullet', lost),
+        'csN': n_of('cs', out), 'csWonN': n_of('cs', won), 'csLostN': n_of('cs', lost),
+        'distN': len(dists),
     }
     return {'ok': True, 'map': mapname, 'steamid': steamid,
             'scale': float(cal['scale']) if cal else None,
@@ -481,6 +553,36 @@ def _player_stats(evs, sid2i, players, kills, rounds, frames, n_frames, voice, f
         s['kpr']     = round(kpr, 2)
         s['talk']    = round(s['talk'], 1)
     return S
+
+def _bounces(rows, min_speed=3.0, cos_max=0.82, merge=6):
+    """Ticks where a grenade hit something, read out of its own flight path.
+
+    CS2 records no bounce event — the demo carries detonations and nothing else —
+    so an impact has to be recognised by shape: the velocity vector turns sharply
+    within a single tick. The speed gate is what keeps a grenade settling on the
+    floor from firing off a dozen of these, and the merge window stops one impact
+    spread over two samples from counting twice.
+
+    Must run on the raw per-tick rows. The trajectory kept for the viewer is
+    thinned by half, and the vertex of a bounce is exactly one tick — thin first
+    and half the impacts disappear."""
+    out = []
+    for i in range(1, len(rows) - 1):
+        a, b, c = rows[i - 1], rows[i], rows[i + 1]
+        if b[0] - a[0] != 1 or c[0] - b[0] != 1:
+            continue
+        v0 = (b[1] - a[1], b[2] - a[2], b[6] - a[6])
+        v1 = (c[1] - b[1], c[2] - b[2], c[6] - b[6])
+        s0 = (v0[0] * v0[0] + v0[1] * v0[1] + v0[2] * v0[2]) ** 0.5
+        s1 = (v1[0] * v1[0] + v1[1] * v1[1] + v1[2] * v1[2]) ** 0.5
+        if s0 < min_speed or s1 < 0.4:
+            continue
+        if (v0[0] * v1[0] + v0[1] * v1[1] + v0[2] * v1[2]) / (s0 * s1) >= cos_max:
+            continue
+        if out and b[0] - out[-1][0] <= merge:
+            continue
+        out.append(b)
+    return out
 
 def parse_demo(path, fps=8):
     """Parse `path` into the compact viewer structure and cache it.
@@ -706,8 +808,16 @@ def parse_demo(path, fps=8):
                         continue
                     pts.append([round((row[0] - start_tick) / step, 2), *to_px(row[1], row[2]),
                                 round(row[6] - ground)])
+                # Impacts are read off the raw rows, before the thinning above.
+                # `sid` rides along so utility can be attributed by steamid rather
+                # than by display name, which collides and changes mid-match.
+                bnc = [[round((r[0] - start_tick) / step, 2), *to_px(r[1], r[2])]
+                       for r in _bounces(kept)]
                 if len(pts) >= 2:
-                    flights.append({'t': typ, 'p': pts, 'by': seg[0][5]})
+                    fl = {'t': typ, 'p': pts, 'by': seg[0][5], 'sid': seg[0][4]}
+                    if bnc:
+                        fl['b'] = bnc
+                    flights.append(fl)
                     throws.append((seg[0][0], seg[0][4], len(flights) - 1))
         if throws:
             lt = parser.parse_ticks(['X', 'Y', 'Z', 'pitch', 'yaw', 'team_num'],

@@ -1311,12 +1311,38 @@
         return rem;
     }
 
+
+    /* A ring on every surface the grenade hit. CS2 records no bounce event, so
+       the impacts are derived in demo.py and shipped per flight; here they only
+       have to be drawn. The age is measured in fractional frames against `f0`,
+       which advances per animation frame rather than per data frame — so the
+       ring expands smoothly at screen refresh even though the trajectory behind
+       it is sampled eight times a second. */
+    const BOUNCE_LIFE = 3.6;                       // frames ≈ 0.45 s at 8 fps
+    function drawBounces(fl, f0, col) {
+        for (const b of fl.b || []) {
+            const age = f0 - b[0];
+            if (age < 0 || age > BOUNCE_LIFE) continue;
+            const k = age / BOUNCE_LIFE;
+            const ease = 1 - (1 - k) * (1 - k);    // fast out, slow settle
+            const r = (2.5 + ease * 13) * SC;
+            const alpha = Math.round((1 - k) * 200).toString(16).padStart(2, '0');
+            ctx.beginPath();
+            ctx.arc(b[1] * SC, b[2] * SC, r, 0, 7);
+            ctx.strokeStyle = col + alpha;
+            ctx.lineWidth = Math.max(1, 2.2 * (1 - k) * SC);
+            ctx.stroke();
+        }
+    }
     function drawFlights(f0) {
         for (const fl of D.flights || []) {
             const p = fl.p, endF = p[p.length - 1][0];
+            const col = fl.tm == null ? (FLY_COL[fl.t] || '#fff') : TEAM[fl.tm];
+            // Impact rings outlive the grenade by a few frames, so they are drawn
+            // before the gate below stops rendering the flight itself.
+            drawBounces(fl, f0, col);
             if (f0 < p[0][0] || f0 > endF + 2) continue;
             const side = fl.tm === 1 ? 'ct' : 't';
-            const col = fl.tm == null ? (FLY_COL[fl.t] || '#fff') : TEAM[fl.tm];
             if (f0 <= endF) {                              
                 let i = 0; while (i < p.length - 1 && p[i + 1][0] <= f0) i++;
                 const a = p[i], b = p[Math.min(i + 1, p.length - 1)];

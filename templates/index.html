@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CS2 Practice Server</title>
-    <link rel="stylesheet" href="/static/style.css?v=166">
+    <link rel="stylesheet" href="/static/style.css?v=167">
     <!-- Themes are disabled until 1.1.7. This ran before the stylesheet to avoid a
          flash of the wrong palette; with only dark shipping there is nothing to
          apply, and a stored rose/slate must NOT be honoured. Restore the original
@@ -537,6 +537,36 @@
                                 </div>
                                 <p class="set-locked-note" data-i18n="settings.themeLocked">Alternate palettes are being reworked and return in 1.1.7. Only the dark theme ships for now.</p>
                             </div>
+                            <div class="set-card set-card-danger" id="uninstallCard">
+                                <div class="set-card-head">
+                                    <span class="set-card-title" data-i18n="uninst.title">UNINSTALL</span>
+                                    <span class="set-card-sub" data-i18n="uninst.sub">Removes the launcher, the practice server, its plugins and every file this app created. Your own CS2 in Steam is not touched.</span>
+                                </div>
+                                <div class="set-card-controls">
+                                    <button class="btn-check-updates unin-danger" id="uninstStart" data-i18n="uninst.start">UNINSTALL…</button>
+                                    <div class="unin-step" id="uninstStep1" hidden>
+                                        <div class="unin-list" id="uninstList"></div>
+                                        <div class="unin-total">
+                                            <span data-i18n="uninst.frees">Frees</span>
+                                            <b id="uninstTotal">—</b>
+                                        </div>
+                                        <div class="fk-row">
+                                            <button class="btn-check-updates unin-danger" id="uninstNext" data-i18n="uninst.continue">CONTINUE</button>
+                                            <button class="btn-check-updates" id="uninstCancel1" data-i18n="uninst.cancel">CANCEL</button>
+                                        </div>
+                                    </div>
+                                    <div class="unin-step" id="uninstStep2" hidden>
+                                        <p class="unin-prompt" id="uninstPrompt"></p>
+                                        <div class="fk-row">
+                                            <input class="fk-input" id="uninstInput" type="text" spellcheck="false" autocomplete="off">
+                                            <button class="fk-btn unin-danger-solid" id="uninstGo" disabled data-i18n="uninst.go">DELETE EVERYTHING</button>
+                                            <button class="btn-check-updates" id="uninstCancel2" data-i18n="uninst.cancel">CANCEL</button>
+                                        </div>
+                                    </div>
+                                    <pre class="unin-log" id="uninstLog" hidden></pre>
+                                    <span class="fk-msg" id="uninstMsg"></span>
+                                </div>
+                            </div>
                         </div>
                     </div>
                     <div class="tab-panel">
@@ -791,8 +821,8 @@
             </div>
         </div>
     </div>
-    <script src="/static/i18n.js?v=128"></script>
-    <script src="/static/script.js?v=92"></script>
+    <script src="/static/i18n.js?v=129"></script>
+    <script src="/static/script.js?v=93"></script>
     <script src="/static/skinpicker.js?v=103"></script>
     <script src="/static/binds.js?v=101"></script>
     <!-- Kept outside .tabs-track: that element is transformed, which would make it
@@ -824,9 +854,9 @@
     </div>
     <script src="/static/weapons.js?v=116"></script>
     <script src="/static/impact.js?v=45"></script>
-    <script src="/static/demo.js?v=98"></script>
+    <script src="/static/demo.js?v=99"></script>
     <script src="/static/statistics.js?v=118"></script>
-    <script src="/static/advanced.js?v=118"></script>
+    <script src="/static/advanced.js?v=119"></script>
     <script src="/static/tutorial.js?v=100"></script>
 </body>
 </html>

@@ -5,6 +5,7 @@ import json
 import html
 import math
 import time
+import stat
 import ctypes
 import ctypes.wintypes as _wt
 import sqlite3
@@ -50,12 +51,18 @@ def _safe_cache_key(key):
     (Werkzeug allows backslashes) can't escape the cache directory on Windows."""
     return bool(key) and re.fullmatch(r'[0-9a-f]{1,40}', key) is not None
 
-APP_VERSION = '1.1.69'
+APP_VERSION = '1.1.73'
 UPDATE_REPO = 'Sevelinish/cs2Prak'
 
 MAPS_DIR = os.path.join(_BASE, 'maps')
+# PyInstaller one-dir puts every bundled file here, next to the exe.
+_INTERNAL_DIR = os.path.join(_BASE, '_internal')
 
 DB_PATH = os.path.join(_BASE, 'skins.db')
+# Mirrors demo.CACHE_DIR. Duplicated rather than imported because `import demo`
+# pulls in demoparser2/polars and re-creates the folder on import — neither of
+# which uninstall should have to do just to learn a path.
+DEMOS_CACHE_DIR = os.path.join(_BASE, 'demos_cache')
 
 SERVER_ROOT  = os.path.join(_BASE, 'cs2Server')
 _CS2_COMMON  = os.path.join(SERVER_ROOT,
@@ -1208,6 +1215,8 @@ def _safe_extract(archive_path, dest):
             members = [n for n in z.namelist() if _safe(n)]
             z.extractall(dest_abs, members=members)
 
+_PLUGIN_BAK_DIR = os.path.join(tempfile.gettempdir(), 'cs2prak_pluginbak')
+
 def _extract_plugin(plugin, archive_path, log):
     """Unpack a plugin archive into its target folder, keeping user data
     (configs / plugins / dbs listed in `preserve`) across the update."""
@@ -1215,7 +1224,7 @@ def _extract_plugin(plugin, archive_path, log):
     os.makedirs(extract_to, exist_ok=True)
     preserve = plugin.get('preserve', [])
 
-    bak = os.path.join(tempfile.gettempdir(), 'cs2prak_pluginbak', plugin['id'])
+    bak = os.path.join(_PLUGIN_BAK_DIR, plugin['id'])
     shutil.rmtree(bak, ignore_errors=True)
     saved = []
     for rel in preserve:
@@ -1242,6 +1251,8 @@ def _extract_plugin(plugin, archive_path, log):
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         shutil.move(src, dst)
     shutil.rmtree(bak, ignore_errors=True)
+
+_PLUGIN_TMP_DIR = os.path.join(tempfile.gettempdir(), 'cs2prak_plugins')
 
 def _install_plugin(plugin_id: str, log: list, os_pref: str = 'windows', _chain=None):
     """Download a plugin's newest release and install it straight into the server
@@ -1271,7 +1282,7 @@ def _install_plugin(plugin_id: str, log: list, os_pref: str = 'windows', _chain=
         raise RuntimeError(f'No suitable asset in release {tag}.')
     log.append(f'Latest: {tag} → {asset["name"]} ({asset["size"] // 1024} KB)')
 
-    tmp_dir = os.path.join(tempfile.gettempdir(), 'cs2prak_plugins')
+    tmp_dir = _PLUGIN_TMP_DIR
     os.makedirs(tmp_dir, exist_ok=True)
     tmp_zip = os.path.join(tmp_dir, asset['name'])
     log.append('Downloading…')
@@ -1543,22 +1554,30 @@ def launch():
 
     return jsonify({'ok': True, 'message': f'Server launched on {map_name}'})
 
-@app.route('/stop', methods=['POST'])
-def stop():
+def _kill_cs2_process():
+    """Kill the dedicated server and the cmd.exe wrapper /launch starts it under
+    (hence /t). Returns whether anything was running — uninstall needs the same
+    kill before it can delete the files cs2.exe holds open."""
     global cs2_process, _cs2_console_hwnd
     _cs2_console_hwnd = None
-    if cs2_process and cs2_process.poll() is None:
+    if not (cs2_process and cs2_process.poll() is None):
+        return False
+    try:
+        subprocess.Popen(
+            ['taskkill', '/f', '/t', '/pid', str(cs2_process.pid)],
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        ).wait(timeout=5)
+    except Exception:
         try:
-            subprocess.Popen(
-                ['taskkill', '/f', '/t', '/pid', str(cs2_process.pid)],
-                creationflags=subprocess.CREATE_NO_WINDOW,
-            ).wait(timeout=5)
+            cs2_process.terminate()
         except Exception:
-            try:
-                cs2_process.terminate()
-            except Exception:
-                pass
-        cs2_process = None
+            pass
+    cs2_process = None
+    return True
+
+@app.route('/stop', methods=['POST'])
+def stop():
+    if _kill_cs2_process():
         return jsonify({'ok': True})
     return jsonify({'ok': False, 'message': 'Server not running'}), 400
 
@@ -1681,6 +1700,34 @@ def _parse_and_respond(path):
         _k.SetPriorityClass(_h, 0x00000040)
     return jsonify({'ok': True, 'key': key, 'meta': meta})
 
+# A real CS2 demo is well under a gigabyte; zstandard reaches 1000:1 on crafted
+# input, so an unbounded stream copy lets a few megabytes fill the system drive.
+_MAX_RAW_DEM = 2 * 1024 ** 3
+
+def _bounded_copy(reader, out_path, limit=_MAX_RAW_DEM):
+    """Decompress into out_path, giving up once the output passes `limit`. The
+    partial file is removed on the way out — nothing half-written is left behind
+    for the parser to choke on or for the temp sweep to miss."""
+    total = 0
+    try:
+        with open(out_path, 'wb') as fo:
+            while True:
+                chunk = reader.read(1 << 20)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > limit:
+                    raise ValueError('archive expands past %d MB — refusing it'
+                                     % (limit // 1048576))
+                fo.write(chunk)
+    except BaseException:
+        try:
+            os.remove(out_path)
+        except OSError:
+            pass
+        raise
+    return out_path
+
 def _to_raw_dem(src):
     """Return a path to a raw .dem, transparently decompressing FACEIT's
     zstandard (.dem.zst) or gzip (.dem.gz) downloads. May return src unchanged."""
@@ -1688,16 +1735,12 @@ def _to_raw_dem(src):
         head = f.read(4)
     if head[:4] == b'\x28\xb5\x2f\xfd':
         import zstandard
-        out = src + '.dem'
-        with open(src, 'rb') as fi, open(out, 'wb') as fo:
-            zstandard.ZstdDecompressor().copy_stream(fi, fo)
-        return out
+        with open(src, 'rb') as fi:
+            return _bounded_copy(zstandard.ZstdDecompressor().stream_reader(fi), src + '.dem')
     if head[:2] == b'\x1f\x8b':
         import gzip
-        out = src + '.dem'
-        with gzip.open(src, 'rb') as gz, open(out, 'wb') as fo:
-            shutil.copyfileobj(gz, fo, 1 << 20)
-        return out
+        with gzip.open(src, 'rb') as gz:
+            return _bounded_copy(gz, src + '.dem')
     return src
 
 @app.route('/api/demo/upload', methods=['POST'])
@@ -2086,14 +2129,21 @@ def _scout_metrics(d):
             })
 
     # ---- utility: who threw what, and whether the flashes landed ---------
-    by_name = {}
+    # Utility is attributed by steamid. Display names collide on pug servers and
+    # change mid-match: either way a player's smokes silently landed on somebody
+    # else's card, or vanished from the counts altogether.
+    by_sid, by_name = {}, {}
     for i, p in enumerate(players):
+        if p.get('steamid'):
+            by_sid.setdefault(str(p['steamid']), i)
         if p.get('name'):
             by_name.setdefault(p['name'], i)
 
     blinds = d.get('blinds') or []
     for fl in (d.get('flights') or []):
-        i = by_name.get(fl.get('by'))
+        i = by_sid.get(str(fl.get('sid'))) if fl.get('sid') else None
+        if i is None:
+            i = by_name.get(fl.get('by'))     # parses cached before sid was stored
         t = fl.get('t')
         if i is None or t not in out[i]['util']:
             continue
@@ -3236,6 +3286,330 @@ def api_server_rebuild():
 
     threading.Thread(target=_run, daemon=True).start()
     return jsonify({'ok': True})
+
+_UNINSTALL_CONFIRM = 'UNINSTALL'
+_UNINSTALL_BAT = os.path.join(tempfile.gettempdir(), 'cs2prak_uninstall.bat')
+_uninstall_state = {'running': False, 'done': False, 'error': None, 'log': []}
+
+_REPARSE   = getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400)
+_DIRECTORY = getattr(stat, 'FILE_ATTRIBUTE_DIRECTORY', 0x10)
+
+def _uninstall_blocked():
+    """Why uninstall must not run, or None. Unfrozen, _BASE is the developer's
+    source checkout — a git working tree — so a full wipe would delete the source.
+    There is no flag to override this; the packaged exe is the only caller that
+    owns the folder it would be erasing."""
+    if not getattr(sys, 'frozen', False):
+        return ('Uninstall runs only from the packaged cs2prak.exe. Started from '
+                'source, _BASE is the project folder and this would delete it.')
+    return None
+
+def _is_under(path, root):
+    """Containment by path components, never by string prefix — a prefix test
+    would happily read a sibling `cs2Server_old` as living inside `cs2Server`."""
+    try:
+        a = os.path.normcase(os.path.abspath(path))
+        r = os.path.normcase(os.path.abspath(root))
+        return os.path.commonpath([a, r]) == r
+    except ValueError:      # separate drives share no path at all
+        return False
+
+def _is_link(p):
+    """Junction, symlink or any other reparse point. os.path.islink() alone is not
+    enough — it returns False for directory junctions by design, and a junction is
+    exactly what points into the player's retail CS2."""
+    try:
+        st = os.lstat(p)
+    except OSError:
+        return False
+    if getattr(st, 'st_file_attributes', 0) & _REPARSE:
+        return True
+    return os.path.islink(p) or _is_junction(p)
+
+def _dir_entry(p):
+    """Is the entry itself a directory? A junction counts — it is a directory that
+    happens to carry a reparse point, and os.rmdir is what unlinks it. Answered
+    from lstat so the link is never followed."""
+    try:
+        st = os.lstat(p)
+    except OSError:
+        return False
+    attrs = getattr(st, 'st_file_attributes', None)
+    return bool(attrs & _DIRECTORY) if attrs is not None else stat.S_ISDIR(st.st_mode)
+
+def _is_plain_dir(p):
+    """Proof that p is a directory we may recurse into. Anything unprovable — an
+    lstat failure, a reparse point, a link — is not a plain directory, and the
+    caller must skip it rather than walk into somebody's game install."""
+    if _is_link(p):
+        return False
+    try:
+        return stat.S_ISDIR(os.lstat(p).st_mode)
+    except OSError:
+        return False
+
+def _size_on_disk(p):
+    """Bytes a wipe would actually free. Hardlinked files free nothing — the
+    overlay shares the retail VPKs, so half the server is other people's bytes —
+    and junctions are not ours to count. Both are skipped, otherwise the preview
+    would promise 50 GB back from a server that occupies almost none."""
+    try:
+        st = os.lstat(p)
+    except OSError:
+        return 0
+    if getattr(st, 'st_file_attributes', 0) & _REPARSE:
+        return 0
+    if not stat.S_ISDIR(st.st_mode):
+        return st.st_size if getattr(st, 'st_nlink', 1) <= 1 else 0
+    total, stack = 0, [p]
+    while stack:
+        try:
+            with os.scandir(stack.pop()) as it:
+                for e in it:
+                    try:
+                        est = e.stat(follow_symlinks=False)
+                    except OSError:
+                        continue
+                    if getattr(est, 'st_file_attributes', 0) & _REPARSE \
+                            or stat.S_ISLNK(est.st_mode):
+                        continue
+                    if stat.S_ISDIR(est.st_mode):
+                        stack.append(e.path)
+                    elif getattr(est, 'st_nlink', 1) <= 1:
+                        total += est.st_size
+        except OSError:
+            continue
+    return total
+
+def _css_basepath_link():
+    """ensure_css_basepath_link() plants `<drive>:\\addons` outside _BASE, so it is
+    the one thing a wipe touches beyond its own roots. Returned only when it is
+    provably a junction still resolving into SERVER_ROOT — at which point dropping
+    the link costs nothing else. A real folder of the user's is never returned."""
+    drive = os.path.splitdrive(os.path.abspath(CSGO_ADDONS))[0]
+    if not drive:
+        return None
+    link = os.path.join(drive + os.sep, 'addons')
+    if not _is_link(link):
+        return None
+    try:
+        target = os.path.realpath(link)
+    except OSError:
+        return None
+    return link if _is_under(target, SERVER_ROOT) else None
+
+def _uninstall_roots():
+    """The only trees uninstall may delete inside of."""
+    return (_BASE, tempfile.gettempdir())
+
+def _uninstall_targets():
+    """Everything the launcher created, derived from the constants that created it.
+    Deliberately split from the code that deletes so the preview route and the
+    tests can read the list without a byte being touched. A path that does not
+    resolve inside _uninstall_roots() is dropped here rather than passed on."""
+    exe = os.path.abspath(sys.executable) if getattr(sys, 'frozen', False) \
+        else os.path.join(_BASE, 'cs2prak.exe')
+    raw = [
+        ('server',        SERVER_ROOT,       'dir'),
+        ('overlayState',  _OVERLAY_STATE,    'file'),
+        ('skinsDb',       DB_PATH,           'file'),
+        ('pluginState',   PLUGIN_STATE_PATH, 'file'),
+        ('demoLibrary',   _LIB_FILE,         'file'),
+        ('faceitAvatars', _AVATAR_FILE,      'file'),
+        ('faceitKey',     _FACEIT_KEY_FILE,  'file'),
+        ('demosCache',    DEMOS_CACHE_DIR,   'dir'),
+        ('tmpUpdate',     _UPDATE_DIR,       'dir'),
+        ('tmpStage',      _STAGE_DIR,        'dir'),
+        ('tmpAdvanced',   _ADV_DIR,          'dir'),
+        ('tmpPlugins',    _PLUGIN_TMP_DIR,   'dir'),
+        ('tmpPluginBak',  _PLUGIN_BAK_DIR,   'dir'),
+        ('maps',          MAPS_DIR,          'dir'),
+        ('internal',      _INTERNAL_DIR,     'dir'),
+        ('exe',           exe,               'file'),
+    ]
+    items = []
+    for key, path, kind in raw:
+        root = next((r for r in _uninstall_roots() if _is_under(path, r)), None)
+        if root is None:
+            continue
+        items.append({'key': key, 'path': os.path.abspath(path), 'kind': kind,
+                      'root': os.path.abspath(root)})
+    link = _css_basepath_link()
+    if link:
+        # first, while SERVER_ROOT still exists to prove the junction is ours
+        items.insert(0, {'key': 'addonsLink', 'path': link, 'kind': 'link', 'root': None})
+    for it in items:
+        it['nested'] = any(o is not it and o['kind'] == 'dir' and
+                           _is_under(it['path'], o['path']) for o in items)
+    return items
+
+def _unlink_entry(p, log):
+    """Remove one entry. For a junction os.rmdir drops the link and leaves the
+    target untouched. Read-only bits are cleared on the retry — steamcmd sets
+    plenty of them."""
+    for retry in (False, True):
+        try:
+            os.rmdir(p) if _dir_entry(p) else os.remove(p)
+            return True
+        except PermissionError:
+            if retry:
+                break
+            try:
+                os.chmod(p, stat.S_IWRITE)
+            except OSError:
+                break
+        except OSError as e:
+            log.append(f'  ! could not remove {p} ({e})')
+            return False
+    log.append(f'  ! could not remove {p} (in use or read-only)')
+    return False
+
+def _rm(path, root, log):
+    """Delete path. Links are unlinked, never followed: shutil.rmtree walks into
+    the overlay's junctions and would take the player's retail CS2 with it.
+    Anything not provably a plain directory or plain file is left alone."""
+    if root is not None and not _is_under(path, root):
+        raise RuntimeError(f'refusing to delete outside {root}: {path}')
+    if not os.path.lexists(path):
+        return
+    if _is_link(path):
+        _unlink_entry(path, log)
+        return
+    if _is_plain_dir(path):
+        try:
+            with os.scandir(path) as it:
+                children = [e.path for e in it]
+        except OSError as e:
+            log.append(f'  ! could not list {path} ({e})')
+            return
+        for c in children:
+            _rm(c, root, log)
+        try:
+            os.rmdir(path)
+        except OSError as e:
+            log.append(f'  ! {path} left behind ({e})')
+        return
+    try:
+        plain_file = stat.S_ISREG(os.lstat(path).st_mode)
+    except OSError:
+        plain_file = False
+    if plain_file:
+        _unlink_entry(path, log)
+    else:
+        log.append(f'  ! skipped {path} — not provably a plain file or folder')
+
+def _write_uninstall_script(leftovers, log):
+    """The app cannot delete its own exe or _internal while it runs, so do what the
+    updater does: a .bat that waits for this PID to disappear, then finishes up.
+    chcp 65001 for the same reason as _write_apply_script — install paths can be
+    Cyrillic and the OEM codepage mangles them into paths that match nothing.
+    `rd /s` does not traverse junctions, and every junction is already unbound by
+    the time this runs, so nothing here can reach the retail game."""
+    pid = os.getpid()
+    lines = [
+        '@echo off',
+        'chcp 65001 >nul',
+        # never hold a working directory inside the folder being deleted
+        'cd /d "%TEMP%"',
+        ':waitloop',
+        f'tasklist /fi "PID eq {pid}" 2>nul | find "{pid}" >nul',
+        'if not errorlevel 1 ( timeout /t 1 /nobreak >nul & goto waitloop )',
+    ]
+    for p in leftovers:
+        lines.append(f'rd /s /q "{p}" 2>nul' if _dir_entry(p) else f'del /f /q "{p}" 2>nul')
+    # bare rd, no /s: the install folder goes only if nothing of the user's is left
+    lines.append(f'rd /q "{_BASE}" 2>nul')
+    lines.append('(goto) 2>nul & del /f /q "%~f0"')
+    with open(_UNINSTALL_BAT, 'w', encoding='utf-8') as f:
+        f.write('\r\n'.join(lines) + '\r\n')
+    log.append(f'Wrote {_UNINSTALL_BAT} — it finishes once cs2prak has exited.')
+
+def _uninstall_run(log):
+    """Ordered so the hazardous part happens while Python is still in charge: kill
+    the server, drop every link into the retail game, and only then delete. What is
+    still locked at the end (our exe, _internal, an open skins.db) is handed to the
+    batch script, which runs after this process is gone."""
+    if _kill_cs2_process():
+        log.append('Stopped the running CS2 server.')
+        time.sleep(1.5)     # taskkill needs a moment to release the game's handles
+    if os.path.isdir(CS2_GAME):
+        log.append('Unlinking the overlay from your installed CS2…')
+        _unbind_overlay(log)
+
+    targets = _uninstall_targets()
+    for item in targets:
+        if item['kind'] == 'link':
+            cur = _css_basepath_link()      # re-prove it; the tree just changed
+            if cur:
+                _unlink_entry(cur, log)
+                log.append(f'Removed the CounterStrikeSharp base-path link {cur}')
+            continue
+        if not os.path.lexists(item['path']):
+            continue
+        log.append(f'Removing {item["path"]}…')
+        _rm(item['path'], item['root'], log)
+
+    leftovers = [i['path'] for i in targets
+                 if i['kind'] != 'link' and os.path.lexists(i['path'])]
+    _write_uninstall_script(leftovers, log)
+    log.append('Closing cs2prak — the last files go with it.')
+
+def _launch_uninstall_script():
+    if os.path.isfile(_UNINSTALL_BAT):
+        subprocess.Popen(['cmd', '/c', _UNINSTALL_BAT],
+                         creationflags=subprocess.CREATE_NO_WINDOW)
+
+@app.route('/api/uninstall/preview')
+def api_uninstall_preview():
+    """What a wipe would remove and how much it frees. Reads only — this is also
+    the safe way to inspect the path logic."""
+    blocked = _uninstall_blocked()
+    items = []
+    for it in _uninstall_targets():
+        exists = os.path.lexists(it['path'])
+        items.append({
+            'key': it['key'], 'path': it['path'], 'kind': it['kind'],
+            'exists': exists, 'nested': it['nested'],
+            # a nested entry's bytes are already counted by the folder above it
+            'size': _size_on_disk(it['path']) if exists and not it['nested'] else 0,
+        })
+    return jsonify({'ok': blocked is None, 'blocked': blocked,
+                    'confirm': _UNINSTALL_CONFIRM, 'items': items,
+                    'total': sum(i['size'] for i in items)})
+
+@app.route('/api/uninstall', methods=['POST'])
+def api_uninstall():
+    blocked = _uninstall_blocked()
+    if blocked:
+        return jsonify({'ok': False, 'message': blocked}), 403
+    data = request.get_json(silent=True) or {}
+    # an exact token, not a boolean: nothing gets wiped by a stray POST or a
+    # {"confirm": true} that some future caller sends without meaning it
+    if data.get('confirm') != _UNINSTALL_CONFIRM:
+        return jsonify({'ok': False, 'message': 'Missing confirmation.'}), 400
+    if _uninstall_state['running']:
+        return jsonify({'ok': False, 'message': 'Uninstall already running'}), 409
+    _uninstall_state.update(running=True, done=False, error=None, log=[])
+
+    def _run():
+        try:
+            _uninstall_run(_uninstall_state['log'])
+        except Exception as e:
+            _uninstall_state['error'] = str(e)
+            _uninstall_state['log'].append(f'ERROR: {e}')
+        finally:
+            _uninstall_state.update(running=False, done=True)
+        if not _uninstall_state['error']:
+            # one last poll gets through before the process disappears
+            threading.Timer(1.2, lambda: (_launch_uninstall_script(), os._exit(0))).start()
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({'ok': True})
+
+@app.route('/api/uninstall/status')
+def api_uninstall_status():
+    # snapshot the log: the worker thread is still appending to the live one
+    return jsonify(dict(_uninstall_state, log=list(_uninstall_state['log'])))
 
 def open_browser(port):
     time.sleep(1)
