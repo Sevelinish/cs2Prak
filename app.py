@@ -535,6 +535,28 @@ def ensure_css_basepath_link(log: list | None = None):
     except Exception as e:
         _say(f'! CSS base-path link error: {e}')
 
+def remove_css_basepath_link(log: list | None = None):
+    """Take the drive-root link back down.
+
+    It has to go the moment the server stops. It points at a folder holding
+    Metamod and CounterStrikeSharp, it sits at the root of the drive the player's
+    own CS2 is installed on, and a client that loads Metamod runs insecure and is
+    refused by every VAC server. Leaving it in place between sessions is what
+    turned that from a momentary risk into a permanent one.
+
+    _css_basepath_link() hands back a path only when it is provably a link of ours
+    resolving into SERVER_ROOT, so a real \addons folder of the user's is safe."""
+    link = _css_basepath_link()
+    if not link:
+        return
+    try:
+        os.rmdir(link)
+        if log is not None:
+            log.append(f'[+] Removed CSS base-path link {link}')
+    except OSError as e:
+        if log is not None:
+            log.append(f'! Could not remove {link} ({e}); remove it with: rmdir "{link}"')
+
 def get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
@@ -1557,23 +1579,28 @@ def launch():
 def _kill_cs2_process():
     """Kill the dedicated server and the cmd.exe wrapper /launch starts it under
     (hence /t). Returns whether anything was running — uninstall needs the same
-    kill before it can delete the files cs2.exe holds open."""
+    kill before it can delete the files cs2.exe holds open.
+
+    The CSS base-path link comes down here rather than in /stop, so every path
+    that stops the server also stops exposing our addons folder at the drive
+    root, where the player's own CS2 would find Metamod and drop out of VAC."""
     global cs2_process, _cs2_console_hwnd
     _cs2_console_hwnd = None
-    if not (cs2_process and cs2_process.poll() is None):
-        return False
-    try:
-        subprocess.Popen(
-            ['taskkill', '/f', '/t', '/pid', str(cs2_process.pid)],
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        ).wait(timeout=5)
-    except Exception:
+    was_running = bool(cs2_process and cs2_process.poll() is None)
+    if was_running:
         try:
-            cs2_process.terminate()
+            subprocess.Popen(
+                ['taskkill', '/f', '/t', '/pid', str(cs2_process.pid)],
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            ).wait(timeout=5)
         except Exception:
-            pass
-    cs2_process = None
-    return True
+            try:
+                cs2_process.terminate()
+            except Exception:
+                pass
+        cs2_process = None
+    remove_css_basepath_link()
+    return was_running
 
 @app.route('/stop', methods=['POST'])
 def stop():
@@ -3619,6 +3646,7 @@ if __name__ == '__main__':
     import mysql_sqlite_server
     mysql_sqlite_server.start()
     ensure_schema()
+    remove_css_basepath_link()
     port = 5000
     threading.Thread(target=open_browser, args=(port,), daemon=True).start()
     app.run(host='127.0.0.1', port=port, debug=False, use_reloader=False)

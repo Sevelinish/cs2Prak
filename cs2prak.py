@@ -143,17 +143,10 @@ def _on_show_console(icon, item):
         ctypes.windll.user32.SetForegroundWindow(hwnd)
 
 def _on_quit(icon, item):
-    if server.cs2_process and server.cs2_process.poll() is None:
-        try:
-            subprocess.Popen(
-                ['taskkill', '/f', '/t', '/pid', str(server.cs2_process.pid)],
-                creationflags=subprocess.CREATE_NO_WINDOW,
-            ).wait(timeout=5)
-        except Exception:
-            try:
-                server.cs2_process.terminate()
-            except Exception:
-                pass
+    # Goes through the app's own stop path so the CSS base-path link at the drive
+    # root comes down with the server. Left standing, the player's CS2 finds
+    # Metamod there on its next start and VAC refuses it.
+    server._kill_cs2_process()
     if server.is_update_staged():
         server.apply_staged_update()
     icon.stop()
@@ -167,6 +160,9 @@ def main():
     mysql_sqlite_server.start()
 
     server.ensure_schema()
+    # A crash or a kill in an older build could leave the drive-root link behind;
+    # clear it before anything else so a stale one cannot outlive this session.
+    server.remove_css_basepath_link()
 
     threading.Thread(target=_run_flask, daemon=True).start()
     threading.Timer(1.5, lambda: webbrowser.open('http://127.0.0.1:5000')).start()
