@@ -16,6 +16,7 @@ import sys
 import json
 import time
 import hashlib
+import threading
 
 from demoparser2 import DemoParser
 
@@ -57,32 +58,82 @@ _NADE_W   = {'hegrenade', 'flashbang', 'smokegrenade', 'molotov', 'incgrenade', 
 _HG_BUCKET = {'head': 'head', 'neck': 'head', 'chest': 'chest', 'stomach': 'stomach',
               'left_arm': 'arm', 'right_arm': 'arm', 'left_leg': 'leg', 'right_leg': 'leg'}
 
+_ADV_WIN    = int(TICKRATE * 2.5)
+_ADV_PROPS  = ['X', 'Y', 'Z', 'yaw', 'pitch', 'spotted', 'flash_duration', 'health', 'team_num']
+_ADV_EVENTS = ['player_death', 'player_hurt', 'weapon_fire', 'round_freeze_end', 'begin_new_match',
+               'smokegrenade_detonate', 'flashbang_detonate', 'hegrenade_detonate',
+               'inferno_startburn', 'decoy_detonate']
+_ADV_LOCK   = threading.Lock()
+_ADV_CACHE  = {}
+
+def _adv_source(dem_path):
+    """The part of the Advanced pass that does not depend on who was picked: the
+    header, the names, the events, and one tick pass wide enough to cover every
+    duel window in the match. The tab used to reparse the demo for each player
+    clicked — a second a click on a 290 MB file, ten of them per match — so the
+    first pick pays for this and the rest read it. Keyed on the same fingerprint
+    as the viewer cache, so a restaged demo re-reads; only the last one is kept."""
+    import numpy as _np
+    key = cache_key(dem_path)
+    with _ADV_LOCK:
+        hit = _ADV_CACHE.get(key)
+        if hit is not None:
+            return hit
+        parser = DemoParser(dem_path)
+        src = {'map': parser.parse_header().get('map_name', ''), 'names': {}}
+        try:
+            pi = parser.parse_player_info()
+            for sid, nm in zip(pi['steamid'], pi['name']):
+                if str(sid) and nm:
+                    src['names'][str(sid)] = str(nm)
+        except Exception:
+            pass
+        evs = src['evs'] = dict(parser.parse_events(_ADV_EVENTS))
+        bnm = _ev(evs, 'begin_new_match')
+        ms = src['match_start'] = int(bnm['tick'].max()) if bnm is not None else 0
+        fe = _ev(evs, 'round_freeze_end')
+        src['freeze'] = sorted(t for t in (fe['tick'].tolist() if fe is not None else [])
+                               if t >= ms)
+        _GN = {'smokegrenade_detonate': 'smoke', 'flashbang_detonate': 'flash',
+               'hegrenade_detonate': 'he', 'inferno_startburn': 'molotov',
+               'decoy_detonate': 'decoy'}
+        nade_evs = src['nades'] = []
+        for _evn, _typ in _GN.items():
+            _df = _ev(evs, _evn)
+            if _df is None:
+                continue
+            for _, _r in _df.iterrows():
+                try:
+                    nade_evs.append((int(_r['tick']), float(_r['x']), float(_r['y']), _typ))
+                except Exception:
+                    pass
+        # The union of every duel window in the match. A pick takes its own ticks
+        # back out of this below — never the whole thing, because a window it did
+        # not ask for would answer a lookup that used to come back empty.
+        dd = _ev(evs, 'player_death')
+        want = set()
+        if dd is not None:
+            for tk in dd['tick'].tolist():
+                if int(tk) >= ms:
+                    want.update(range(max(0, int(tk) - _ADV_WIN - 2), int(tk) + 8))
+        td = parser.parse_ticks(_ADV_PROPS, ticks=sorted(want)) if want else None
+        _nan = _np.full(len(td) if td is not None else 0, _np.nan)
+        src['cols'] = {c: (td[c].to_numpy() if c in td.columns else _nan)
+                       for c in ['steamid', 'tick'] + _ADV_PROPS} if td is not None else {}
+        _ADV_CACHE.clear()
+        _ADV_CACHE[key] = src
+        return src
+
 def analyze_player(dem_path, steamid):
-    """ADVANCED per-player duel analysis (tick-accurate). Parses `dem_path` fresh and
-    builds, for the player `steamid`, every duel (kill/death involving them) with reaction
-    time, crosshair-placement error, first-bullet hit, distance, HP and flash state.
-    Returns a dict the Advanced tab renders. Heavier than the normal parse."""
+    """ADVANCED per-player duel analysis (tick-accurate). Builds, for the player
+    `steamid`, every duel (kill/death involving them) with reaction time,
+    crosshair-placement error, first-bullet hit, distance, HP and flash state.
+    Returns a dict the Advanced tab renders. Reads `_adv_source` for the parse."""
     import math
-    parser = DemoParser(dem_path)
-    mapname = parser.parse_header().get('map_name', '')
-
-    names = {}
-    try:
-        pi = parser.parse_player_info()
-        for sid, nm in zip(pi['steamid'], pi['name']):
-            if str(sid) and nm:
-                names[str(sid)] = str(nm)
-    except Exception:
-        pass
-
-    evs = dict(parser.parse_events(
-        ['player_death', 'player_hurt', 'weapon_fire', 'round_freeze_end', 'begin_new_match',
-         'smokegrenade_detonate', 'flashbang_detonate', 'hegrenade_detonate',
-         'inferno_startburn', 'decoy_detonate']))
-    bnm = _ev(evs, 'begin_new_match')
-    match_start = int(bnm['tick'].max()) if bnm is not None else 0
-    fe = _ev(evs, 'round_freeze_end')
-    freeze = sorted(t for t in (fe['tick'].tolist() if fe is not None else []) if t >= match_start)
+    import numpy as _np
+    src = _adv_source(dem_path)
+    mapname, names, evs = src['map'], src['names'], src['evs']
+    match_start, freeze, nade_evs = src['match_start'], src['freeze'], src['nades']
 
     cal = CALIB.get(mapname)
 
@@ -91,19 +142,6 @@ def analyze_player(dem_path, steamid):
             return None
         return [round(float((x - cal['pos_x']) / cal['scale']), 1),
                 round(float((cal['pos_y'] - y) / cal['scale']), 1)]
-
-    _GN = {'smokegrenade_detonate': 'smoke', 'flashbang_detonate': 'flash',
-           'hegrenade_detonate': 'he', 'inferno_startburn': 'molotov', 'decoy_detonate': 'decoy'}
-    nade_evs = []
-    for _evn, _typ in _GN.items():
-        _df = _ev(evs, _evn)
-        if _df is None:
-            continue
-        for _, _r in _df.iterrows():
-            try:
-                nade_evs.append((int(_r['tick']), float(_r['x']), float(_r['y']), _typ))
-            except Exception:
-                pass
 
     def round_no(tk):
         r = 0
@@ -143,22 +181,19 @@ def analyze_player(dem_path, steamid):
         return {'ok': True, 'map': mapname, 'steamid': steamid,
                 'name': names.get(steamid, '?'), 'duels': [], 'agg': {}}
 
-    WIN = int(TICKRATE * 2.5)
+    WIN = _ADV_WIN
     want = set()
     for d in duels:
         # Two ticks before the window so the counter-strafe can look one tick
         # back from the opening shot, and past the death because that shot may
         # land a few ticks after it.
         want.update(range(max(0, d['tick'] - WIN - 2), d['tick'] + 8))
-    _props = ['X', 'Y', 'Z', 'yaw', 'pitch', 'spotted', 'flash_duration', 'health', 'team_num']
-    td = parser.parse_ticks(_props, ticks=sorted(want))
-    # A demo that does not carry one of these must degrade to "unmeasured", not
-    # take the whole tab down with a KeyError.
-    _nan = [float('nan')] * len(td)
-    C = {c: (td[c].to_numpy() if c in td.columns else _nan)
-         for c in ['steamid', 'tick'] + _props}
+    # A demo that does not carry one of these props must degrade to "unmeasured",
+    # not take the whole tab down with a KeyError — `_adv_source` fills the
+    # missing ones with NaN.
+    C = src['cols']
     P = {}
-    for i in range(len(C['tick'])):
+    for i in (_np.flatnonzero(_np.isin(C['tick'], list(want))).tolist() if C and want else []):
         P[(str(C['steamid'][i]), int(C['tick'][i]))] = (
             C['X'][i], C['Y'][i], C['Z'][i], C['yaw'][i], C['pitch'][i],
             C['spotted'][i], C['flash_duration'][i], C['health'][i], C['team_num'][i])
@@ -646,7 +681,13 @@ def parse_demo(path, fps=8):
     def t2f(tick):
         return min(n_frames - 1, max(0, round((tick - start_tick) / step)))
 
-    props = ['X', 'Y', 'Z', 'yaw', 'pitch', 'health', 'is_alive', 'team_num', 'active_weapon_name']
+    # Every parse_ticks call rescans the whole demo: about 0.4 s of fixed cost on
+    # a 290 MB file, against a few tens of milliseconds for the props themselves.
+    # So this pass asks for everything that is sampled on the frame grid at once
+    # and the readers below take their own slice of it; the second and last pass,
+    # further down, does the same for everything sampled off the grid.
+    props = ['X', 'Y', 'Z', 'yaw', 'pitch', 'health', 'is_alive', 'team_num',
+             'active_weapon_name', 'inventory']
     td = parser.parse_ticks(props, ticks=frame_ticks)
 
     counts = td['steamid'].value_counts()
@@ -676,40 +717,48 @@ def parse_demo(path, fps=8):
         return _widx[n]
 
     from collections import defaultdict
+    import numpy as _np
     cols = {c: td[c].to_numpy() for c in
             ('steamid', 'tick', 'X', 'Y', 'Z', 'yaw', 'pitch', 'health', 'is_alive', 'team_num',
              'active_weapon_name')}
-    for r in range(len(cols['tick'])):
-        i = sid2i.get(str(cols['steamid'][r]))
+    # Walked with zip rather than by row index: 175k rows times ten dict-and-index
+    # lookups is most of what this loop used to cost. The arithmetic stays in
+    # Python — round() and numpy round the last digit differently, and these
+    # numbers go into the cached blob verbatim.
+    for sd, tk, x, y, z, yw, pit, hp, al, tn, wpn in zip(
+            cols['steamid'], cols['tick'], cols['X'], cols['Y'], cols['Z'],
+            cols['yaw'], cols['pitch'], cols['health'], cols['is_alive'],
+            cols['team_num'], cols['active_weapon_name']):
+        i = sid2i.get(str(sd))
         if i is None:
             continue
-        x, y, tn = cols['X'][r], cols['Y'][r], cols['team_num'][r]
         if x != x or y != y or tn != tn or int(tn) not in (2, 3):
             continue
-        fi = t2f(int(cols['tick'][r]))
+        fi = t2f(int(tk))
         px, py = to_px(float(x), float(y))
-        z = cols['Z'][r]
         lvl = 1 if (has_lower and z == z and float(z) < lower_max) else 0
-        yaw = cols['yaw'][r];     yaw = round(float(yaw)) if yaw == yaw else 0
-        pit = cols['pitch'][r];   pitch = round(float(pit)) if pit == pit else 0
+        yaw = round(float(yw)) if yw == yw else 0
+        pitch = round(float(pit)) if pit == pit else 0
         zi = round(float(z)) if z == z else 0
-        hp = cols['health'][r];   hp = int(hp) if hp == hp else 0
-        al = cols['is_alive'][r]; alive = 1 if (al == al and bool(al)) else 0
+        hp = int(hp) if hp == hp else 0
+        alive = 1 if (al == al and bool(al)) else 0
         frames[fi][i] = [px, py, yaw, hp, 1 if int(tn) == 3 else 0, alive, lvl,
-                         _weapon(cols['active_weapon_name'][r]), zi, pitch]
+                         _weapon(wpn), zi, pitch]
 
     inv = {}
     try:
-        it = parser.parse_ticks(['inventory'], ticks=frame_ticks[::2])
-        ic = {c: it[c].to_numpy() for c in ('steamid', 'tick', 'inventory')}
         inv_raw = defaultdict(list)
-        for r in range(len(ic['tick'])):
-            i = sid2i.get(str(ic['steamid'][r]))
+        # Still every other frame, as when this had a pass of its own: the
+        # checkpoint list is what the viewer replays, and sampling it twice as
+        # often would only make the blob bigger.
+        _half = _np.flatnonzero((cols['tick'] - start_tick) % (2 * step) == 0)
+        for sd, tk, iv in zip(cols['steamid'][_half], cols['tick'][_half],
+                              td['inventory'].to_numpy()[_half]):
+            i = sid2i.get(str(sd))
             if i is None:
                 continue
-            iv = ic['inventory'][r]
             if iv is not None and len(iv):
-                inv_raw[i].append((t2f(int(ic['tick'][r])),
+                inv_raw[i].append((t2f(int(tk)),
                                    tuple(sorted(_weapon(str(w)) for w in iv))))
         for i, lst in inv_raw.items():
             lst.sort()
@@ -721,31 +770,8 @@ def parse_demo(path, fps=8):
     except Exception:
         inv = {}
 
-    econ = {}
-    if freeze_ticks:
-        try:
-            snap = {ft + 192: ri for ri, ft in enumerate(freeze_ticks)}
-            et = parser.parse_ticks(
-                ['balance', 'armor_value', 'has_helmet', 'has_defuser', 'current_equip_value'],
-                ticks=list(snap.keys()))
-            ec = {c: et[c].to_numpy() for c in
-                  ('steamid', 'tick', 'balance', 'armor_value', 'has_helmet',
-                   'has_defuser', 'current_equip_value')}
-            _i = lambda v: int(v) if v == v else 0
-            _b = lambda v: 1 if (v == v and bool(v)) else 0
-            for r in range(len(ec['tick'])):
-                i = sid2i.get(str(ec['steamid'][r]))
-                ri = snap.get(int(ec['tick'][r]))
-                if i is None or ri is None:
-                    continue
-                econ.setdefault(ri, {})[i] = [
-                    _i(ec['balance'][r]), _i(ec['armor_value'][r]),
-                    _b(ec['has_helmet'][r]), _b(ec['has_defuser'][r]),
-                    _i(ec['current_equip_value'][r])]
-        except Exception:
-            econ = {}
-
     flights = []
+    throws  = []
     GTYPE = {'CHEGrenade': 'he', 'CSmokeGrenade': 'smoke', 'CFlashbang': 'flash',
              'CIncendiaryGrenade': 'molotov', 'CMolotovGrenade': 'molotov',
              'CDecoyGrenade': 'decoy', 'CMolotovProjectile': 'molotov',
@@ -753,22 +779,26 @@ def parse_demo(path, fps=8):
              'CDecoyProjectile': 'decoy', 'CBaseCSGrenadeProjectile': 'he'}
     try:
         gr = parser.parse_grenades()
-        gx = gr['x'].to_numpy(); gy = gr['y'].to_numpy(); gz = gr['z'].to_numpy()
-        gt = gr['tick'].to_numpy(); ge = gr['grenade_entity_id'].to_numpy()
-        gty = gr['grenade_type'].to_numpy()
-        gsid = gr['steamid'].to_numpy(); gnm = gr['name'].to_numpy()
         from collections import defaultdict
+        # Seven rows in eight are a grenade still sitting in somebody's inventory:
+        # 1.67M rows come back and 230k of them are on a flight path. Sieving
+        # them out with numpy keeps both the per-row Python work and the string
+        # materialisation off the other 1.44M.
+        _gt = gr['grenade_type']
+        _live = [t for t in _gt.unique().tolist()
+                 if t.endswith('Projectile') or t == 'CIncendiaryGrenade']
+        _x = gr['x'].to_numpy(); _y = gr['y'].to_numpy()
+        seg_rows = gr.iloc[_np.flatnonzero(
+            ~(_np.isnan(_x) | _np.isnan(_y)) & _gt.isin(_live).to_numpy())]
+        gx = seg_rows['x'].to_numpy(); gy = seg_rows['y'].to_numpy()
+        gz = seg_rows['z'].to_numpy(); gt = seg_rows['tick'].to_numpy()
+        ge = seg_rows['grenade_entity_id'].to_numpy()
+        gty = seg_rows['grenade_type'].to_numpy()
+        gsid = seg_rows['steamid'].to_numpy(); gnm = seg_rows['name'].to_numpy()
         ent = defaultdict(list)
-        for r in range(len(gt)):
-            x = gx[r]; y = gy[r]
-            if x != x or y != y:
-                continue
-            t = str(gty[r])
-            if not (t.endswith('Projectile') or t == 'CIncendiaryGrenade'):
-                continue
-            z = gz[r]; z = float(z) if z == z else 0.0
-            ent[int(ge[r])].append((int(gt[r]), float(x), float(y), t, str(gsid[r]), str(gnm[r]), z))
-        throws = []
+        for eid, tk, x, y, ty, sd, nm, z in zip(ge, gt, gx, gy, gty, gsid, gnm, gz):
+            ent[int(eid)].append((int(tk), float(x), float(y), str(ty), str(sd), str(nm),
+                                  float(z) if z == z else 0.0))
         DET_EV = {'smoke': 'smokegrenade_detonate', 'he': 'hegrenade_detonate',
                   'flash': 'flashbang_detonate', 'molotov': 'inferno_startburn',
                   'decoy': 'decoy_detonate'}
@@ -819,19 +849,84 @@ def parse_demo(path, fps=8):
                         fl['b'] = bnc
                     flights.append(fl)
                     throws.append((seg[0][0], seg[0][4], len(flights) - 1))
-        if throws:
-            lt = parser.parse_ticks(['X', 'Y', 'Z', 'pitch', 'yaw', 'team_num'],
-                                    ticks=sorted({th for th, _, _ in throws}))
-            lc = {c: lt[c].to_numpy() for c in
-                  ('steamid', 'tick', 'X', 'Y', 'Z', 'pitch', 'yaw', 'team_num')}
-            pose = {}
-            for r in range(len(lc['tick'])):
-                if lc['X'][r] != lc['X'][r]:
+    except Exception:
+        flights, throws = [], []
+
+    # Reaction time reads `spotted` every other tick around each kill. The tick
+    # set is worked out here rather than down in the react block so it can ride
+    # along on the pass below instead of paying for a scan of its own.
+    dd2, wf2, klist, react_ticks = None, None, [], []
+    try:
+        dd2 = _ev(evs, 'player_death'); wf2 = _ev(evs, 'weapon_fire')
+        if dd2 is not None and wf2 is not None:
+            RWIN = TICKRATE * 3
+            want_r = set()
+            for _, r in dd2.iterrows():
+                tk = int(r['tick'])
+                if tk < match_start:
                     continue
-                tn = lc['team_num'][r]
-                pose[(str(lc['steamid'][r]), int(lc['tick'][r]))] = (
-                    round(float(lc['X'][r])), round(float(lc['Y'][r])), round(float(lc['Z'][r])),
-                    round(float(lc['pitch'][r]), 1), round(float(lc['yaw'][r]), 1),
+                a = sid2i.get(str(r.get('attacker_steamid')))
+                v = str(r.get('user_steamid'))
+                if a is not None and v in sid2i:
+                    klist.append((a, v, tk))
+                    want_r.update(range(max(0, tk - RWIN), tk + 1, 2))
+            react_ticks = sorted(want_r)
+    except Exception:
+        klist, react_ticks = [], []
+
+    # The off-grid pass: buy-time economy, the spotted trace, the pose of whoever
+    # threw each grenade and the clan names. Four scans of the demo when they
+    # were asked for separately, one now. Each reader takes its own ticks back
+    # out of the result, and keeps its own try/except so that a demo missing one
+    # of these props still loses only what depends on it.
+    snap  = {ft + 192: ri for ri, ft in enumerate(freeze_ticks)}
+    probe = (freeze_ticks[:6] if freeze_ticks else [start_tick])
+    throw_ticks = sorted({th for th, _, _ in throws})
+    BT = {}
+    try:
+        bt = parser.parse_ticks(
+            ['X', 'Y', 'Z', 'pitch', 'yaw', 'team_num', 'spotted', 'team_clan_name',
+             'balance', 'armor_value', 'has_helmet', 'has_defuser', 'current_equip_value'],
+            ticks=sorted(set(snap) | set(probe) | set(throw_ticks) | set(react_ticks)))
+        BT = {c: bt[c].to_numpy() for c in bt.columns}
+    except Exception:
+        BT = {}
+
+    def _bt_rows(ticks):
+        """Rows of the off-grid pass at exactly `ticks`, in the order they came
+        back — every reader below wants its own slice and none of the rest."""
+        col = BT.get('tick')
+        if col is None or not len(ticks):
+            return _np.empty(0, dtype=_np.intp)
+        return _np.flatnonzero(_np.isin(col, list(ticks)))
+
+    econ = {}
+    if freeze_ticks:
+        try:
+            _i = lambda v: int(v) if v == v else 0
+            _b = lambda v: 1 if (v == v and bool(v)) else 0
+            for r in _bt_rows(snap):
+                i = sid2i.get(str(BT['steamid'][r]))
+                ri = snap.get(int(BT['tick'][r]))
+                if i is None or ri is None:
+                    continue
+                econ.setdefault(ri, {})[i] = [
+                    _i(BT['balance'][r]), _i(BT['armor_value'][r]),
+                    _b(BT['has_helmet'][r]), _b(BT['has_defuser'][r]),
+                    _i(BT['current_equip_value'][r])]
+        except Exception:
+            econ = {}
+
+    if throws:
+        try:
+            pose = {}
+            for r in _bt_rows(throw_ticks):
+                if BT['X'][r] != BT['X'][r]:
+                    continue
+                tn = BT['team_num'][r]
+                pose[(str(BT['steamid'][r]), int(BT['tick'][r]))] = (
+                    round(float(BT['X'][r])), round(float(BT['Y'][r])), round(float(BT['Z'][r])),
+                    round(float(BT['pitch'][r]), 1), round(float(BT['yaw'][r]), 1),
                     1 if (tn == tn and int(tn) == 3) else 0)
             for (th, sid, fi) in throws:
                 pz = pose.get((sid, th))
@@ -839,8 +934,8 @@ def parse_demo(path, fps=8):
                     flights[fi]['sp'] = [pz[0], pz[1], pz[2]]
                     flights[fi]['sa'] = [pz[3], pz[4]]
                     flights[fi]['tm'] = pz[5]
-    except Exception:
-        flights = []
+        except Exception:
+            flights = []
 
     kills = []
     dd = _ev(evs, 'player_death')
@@ -965,11 +1060,9 @@ def parse_demo(path, fps=8):
     team_names = {}
     try:
         from collections import Counter as _Counter
-        probe = (freeze_ticks[:6] if freeze_ticks else [start_tick])
-        cn = parser.parse_ticks(['team_clan_name'], ticks=probe)
         acc = {}
-        for sid, nm in zip(cn['steamid'], cn['team_clan_name']):
-            s = str(sid)
+        for r in _bt_rows(probe):
+            s = str(BT['steamid'][r]); nm = BT['team_clan_name'][r]
             if s in sid2i and isinstance(nm, str) and nm.strip():
                 acc.setdefault(sid2i[s], _Counter())[nm.strip()] += 1
         for i, c in acc.items():
@@ -1017,8 +1110,10 @@ def parse_demo(path, fps=8):
         try:
             import ctypes as _ct
             import struct as _st
+            import threading as _th
             import numpy as _np
             from collections import defaultdict as _dd
+            from concurrent.futures import ThreadPoolExecutor as _Pool
             from pyogg import opus as _opus
 
             SR  = 48000
@@ -1026,12 +1121,53 @@ def parse_demo(path, fps=8):
             PLC = SR * 20 // 1000
             GAP = int(TICKRATE * 0.8)
             MIN = SR // 5 * 2
-            _err = _ct.c_int()
+            # libopus is loaded as a CDLL, so opus_decode drops the GIL while it
+            # runs — the only work in this whole parse a second thread can
+            # overlap, demoparser2 holding the GIL for every one of its calls.
+            # Four workers is where it stops scaling: the ctypes marshalling
+            # around each 20 ms packet runs under the GIL and there are 160k of
+            # them, which caps the win at about a third.
+            _lopus = _opus.libopus
+            _tls = _th.local()
 
             def _wav(pcm):
                 return (b'RIFF' + _st.pack('<I', 36 + len(pcm)) + b'WAVE' + b'fmt ' +
                         _st.pack('<IHHIIHH', 16, 1, 1, SR, SR * 2, 2, 16) +
                         b'data' + _st.pack('<I', len(pcm)) + pcm)
+
+            def _decode(utt):
+                """One utterance -> gain-corrected PCM, or None if it is too short
+                to be speech. Runs on a pool thread: the decoder state and the
+                output buffer are per-thread, libopus keeps no globals."""
+                buf = getattr(_tls, 'buf', None)
+                if buf is None:
+                    buf = _tls.buf = (_ct.c_int16 * CAP)()
+                err = _ct.c_int()
+                dec = _opus.opus_decoder_create(SR, 1, _ct.byref(err))
+                parts, prev = [], None
+                for tk, cb in utt:
+                    if prev is not None:
+                        miss = round((tk - prev) / (TICKRATE * 0.02)) - 1
+                        for _ in range(max(0, min(miss, 10))):
+                            ns = _lopus.opus_decode(dec, None, 0, buf, PLC, 0)
+                            if ns > 0:
+                                parts.append(bytes((_ct.c_int16 * ns).from_buffer(buf, 0)))
+                    arr = (_ct.c_ubyte * len(cb)).from_buffer_copy(cb)
+                    ns = _lopus.opus_decode(dec, arr, len(cb), buf, CAP, 0)
+                    if ns > 0:
+                        parts.append(bytes((_ct.c_int16 * ns).from_buffer(buf, 0)))
+                    prev = tk
+                _opus.opus_decoder_destroy(dec)
+                pcm = b''.join(parts)
+                if len(pcm) < MIN:
+                    return None
+                _a = _np.frombuffer(pcm, dtype=_np.int16).astype(_np.float32)
+                _rms = float(_np.sqrt(_np.mean(_a * _a))) if _a.size else 0.0
+                if _rms >= 1.0:
+                    _peak = float(_np.max(_np.abs(_a))) or 1.0
+                    _gain = min(2400.0 / _rms, 30000.0 / _peak, 8.0)
+                    pcm = _np.clip(_a * _gain, -32768, 32767).astype('<i2').tobytes()
+                return pcm
 
             bysid = _dd(list)
             for e in vd:
@@ -1042,8 +1178,7 @@ def parse_demo(path, fps=8):
                 try: os.remove(os.path.join(vdir, f))
                 except OSError: pass
 
-            buf = (_ct.c_int16 * CAP)()
-            n = 0
+            utts = []
             for sid, chunks in bysid.items():
                 idx = sid2i.get(sid)
                 if idx is None:
@@ -1054,42 +1189,28 @@ def parse_demo(path, fps=8):
                     j = i
                     while j + 1 < len(chunks) and chunks[j + 1][0] - chunks[j][0] <= GAP:
                         j += 1
-                    utt = chunks[i:j + 1]
+                    utts.append((idx, chunks[i:j + 1]))
                     i = j + 1
-                    dec = _opus.opus_decoder_create(SR, 1, _ct.byref(_err))
-                    pcm = bytearray()
-                    prev = None
-                    for tk, cb in utt:
-                        if prev is not None:
-                            miss = round((tk - prev) / (TICKRATE * 0.02)) - 1
-                            for _ in range(max(0, min(miss, 10))):
-                                ns = _opus.opus_decode(dec, None, 0, buf, PLC, 0)
-                                if ns > 0:
-                                    pcm += bytes((_ct.c_int16 * ns).from_buffer(buf, 0))
-                        arr = (_ct.c_ubyte * len(cb)).from_buffer_copy(cb)
-                        ns = _opus.opus_decode(dec, arr, len(cb), buf, CAP, 0)
-                        if ns > 0:
-                            pcm += bytes((_ct.c_int16 * ns).from_buffer(buf, 0))
-                        prev = tk
-                    _opus.opus_decoder_destroy(dec)
-                    if len(pcm) < MIN:
-                        continue
-                    _a = _np.frombuffer(bytes(pcm), dtype=_np.int16).astype(_np.float32)
-                    _rms = float(_np.sqrt(_np.mean(_a * _a))) if _a.size else 0.0
-                    if _rms >= 1.0:
-                        _peak = float(_np.max(_np.abs(_a))) or 1.0
-                        _gain = min(2400.0 / _rms, 30000.0 / _peak, 8.0)
-                        pcm = _np.clip(_a * _gain, -32768, 32767).astype('<i2').tobytes()
-                    else:
-                        pcm = bytes(pcm)
-                    with open(os.path.join(vdir, f'{n}.wav'), 'wb') as wf:
-                        wf.write(_wav(pcm))
-                    ff = t2f(utt[0][0])
-                    e0 = frames[ff][idx] if 0 <= ff < n_frames else None
-                    side = e0[4] if e0 else (1 if idx in teamA else 0)
-                    voice.append({'idx': idx, 'n': n, 'f': ff,
-                                  'dur': round(len(pcm) / 2 / SR, 2), 'side': side})
-                    n += 1
+            n = 0
+            with _Pool(max_workers=min(4, os.cpu_count() or 1)) as _ex:
+                # map() hands results back in submission order, so the .wav
+                # numbering is the one this produced utterance by utterance.
+                # A batch at a time rather than all 945: the decoded audio is
+                # ~180 KB per utterance and holding the whole match at once
+                # would put 170 MB on the heap for nothing.
+                for b in range(0, len(utts), 64):
+                    batch = utts[b:b + 64]
+                    for (idx, utt), pcm in zip(batch, _ex.map(_decode, [u for _, u in batch])):
+                        if pcm is None:
+                            continue
+                        with open(os.path.join(vdir, f'{n}.wav'), 'wb') as wf:
+                            wf.write(_wav(pcm))
+                        ff = t2f(utt[0][0])
+                        e0 = frames[ff][idx] if 0 <= ff < n_frames else None
+                        side = e0[4] if e0 else (1 if idx in teamA else 0)
+                        voice.append({'idx': idx, 'n': n, 'f': ff,
+                                      'dur': round(len(pcm) / 2 / SR, 2), 'side': side})
+                        n += 1
             voice.sort(key=lambda u: u['f'])
         except Exception:
             voice = []
@@ -1097,8 +1218,7 @@ def parse_demo(path, fps=8):
     react = {}
     try:
         from collections import defaultdict as _dd
-        dd2 = _ev(evs, 'player_death'); wf2 = _ev(evs, 'weapon_fire')
-        if dd2 is not None and wf2 is not None:
+        if wf2 is not None:
             shots_by = _dd(list)
             for _, r in wf2.iterrows():
                 w = str(r.get('weapon') or '')
@@ -1109,30 +1229,15 @@ def parse_demo(path, fps=8):
                     shots_by[s].append(int(r['tick']))
             for s in shots_by:
                 shots_by[s].sort()
-            klist = []
-            for _, r in dd2.iterrows():
-                tk = int(r['tick'])
-                if tk < match_start:
-                    continue
-                a = sid2i.get(str(r.get('attacker_steamid')))
-                v = str(r.get('user_steamid'))
-                if a is not None and v in sid2i:
-                    klist.append((a, v, tk))
-            WIN = TICKRATE * 3
-            want = set()
-            for (a, v, tk) in klist:
-                want.update(range(max(0, tk - WIN), tk + 1, 2))
-            if want and klist:
-                sp = parser.parse_ticks(['spotted'], ticks=sorted(want))
-                sc = {c: sp[c].to_numpy() for c in ('steamid', 'tick', 'spotted')}
-                spot = {}
-                for r in range(len(sc['tick'])):
-                    val = sc['spotted'][r]
-                    spot[(str(sc['steamid'][r]), int(sc['tick'][r]))] = bool(val) if val == val else False
+            if react_ticks and klist:
+                _rr = _bt_rows(react_ticks)
+                spot = {(str(sd), int(tk)): (bool(v) if v == v else False)
+                        for sd, tk, v in zip(BT['steamid'][_rr], BT['tick'][_rr],
+                                             BT['spotted'][_rr])}
                 per = _dd(list)
                 for (a, v, tk) in klist:
                     tspot, prev = None, None
-                    for t in range(max(0, tk - WIN), tk + 1, 2):
+                    for t in range(max(0, tk - RWIN), tk + 1, 2):
                         cur = spot.get((v, t))
                         if cur is None:
                             continue

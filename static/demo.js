@@ -405,6 +405,7 @@
             lowerRadar = null; elFloor.style.display = 'none';
         }
 
+        cineOpenBtn.style.display = (D.flights || []).length ? '' : 'none';
         buildRounds();
         buildPlayers();
         buildTimelineMarks();
@@ -440,7 +441,7 @@
     });
 
     $('dvBack').addEventListener('click', () => {
-        pause(); stopLaunchPoll(); dvLaunch.style.display = 'none';
+        cineExit(); pause(); stopLaunchPoll(); dvLaunch.style.display = 'none';
         viewer.style.display = 'none'; picker.style.display = '';
         initPicker();   
     });
@@ -482,6 +483,7 @@
     canvas.addEventListener('wheel', e => {
         if (!D) return;
         e.preventDefault();
+        if (cine) return;
         const rect = canvas.getBoundingClientRect();
         const mx = e.clientX - rect.left, my = e.clientY - rect.top;
         const old = view.zoom;
@@ -494,6 +496,7 @@
     }, { passive: false });
     let pressXY = null, pressMoved = false;
     canvas.addEventListener('mousedown', e => {
+        if (cine) return;
         pressXY = [e.clientX, e.clientY]; pressMoved = false;
         if (view.zoom > 1) { panning = true; panLast = [e.clientX, e.clientY]; canvas.style.cursor = 'grabbing'; }
     });
@@ -547,7 +550,7 @@
             return [((cx - view.ox) / view.zoom) / SC, ((cy - view.oy) / view.zoom) / SC];
         };
         drawCv.addEventListener('mousedown', e => {
-            if (!drawMode) return;
+            if (!drawMode || cine) return;
             e.preventDefault(); drawingNow = true;
             strokes.push([toRadar(e)]); redrawStrokes();
         });
@@ -617,12 +620,12 @@
         }
     }
     canvas.addEventListener('click', e => {
-        if (pressMoved || playing) return;              
+        if (pressMoved || playing || cine) return;              
         const idx = playerAtClient(e.clientX, e.clientY);
         if (idx >= 0) exportPlayerSetpos(idx);
     });
     canvas.addEventListener('mousemove', e => {         
-        if (panning || playing || view.zoom > 1) return;
+        if (panning || playing || cine || view.zoom > 1) return;
         canvas.style.cursor = playerAtClient(e.clientX, e.clientY) >= 0 ? 'pointer' : '';
     });
 
@@ -707,9 +710,12 @@
         if (newest) newest.classList.add('is-now');
     }
 
-    const NADE_LBL  = { smoke: 'Smoke', he: 'HE', flash: 'Flash', molotov: 'Molotov', decoy: 'Decoy' };
+    const nadeLbl = t => T('dv.nade.' + t);
     const NADE_ICON = { smoke: 'smokegrenade', he: 'highexplosivegrenade', flash: 'flashbang',
                         molotov: 'molotov', decoy: 'decoygrenade' };
+    /** The lineup as one console line. Both the nade card and the cinematic
+     *  hand this to the user, so there is one format to get right. */
+    const tpLine = f => 'setpos ' + f.sp.join(' ') + ';setang ' + f.sa.join(' ') + ' 0';
     function nadeTime(throwF) {
         const r = D.rounds[curRound];
         let s = Math.max(0, Math.round(ROUND_TIME - (throwF - r.freeze) / D.fps));
@@ -734,7 +740,7 @@
                 `<span class="dv-nade-ic" style="-webkit-mask-image:url(/static/weapon_icons/${sl}.png);` +
                 `mask-image:url(/static/weapon_icons/${sl}.png);background:${col}"></span>` +
                 `<span class="dv-nade-by">${f.by || '?'}</span>` +
-                `<span class="dv-nade-t">${NADE_LBL[f.t] || f.t}</span>` +
+                `<span class="dv-nade-t">${nadeLbl(f.t)}</span>` +
                 `<span class="dv-nade-go" aria-hidden="true"></span>`;
             row.addEventListener('click', () => openNade(o.i));
             elNades.appendChild(row);
@@ -747,6 +753,7 @@
     function openNade(i) {
         const f = D.flights[i];
         if (!f || !f.sp) return;
+        cineExit();
         nadeSel = f;
         pause();
         seek(f.p[0][0]);
@@ -756,7 +763,7 @@
         const u = 'url(/static/weapon_icons/' + sl + '.png)';
         ic.style.webkitMaskImage = u; ic.style.maskImage = u;
         ic.style.background = FLY_COL[f.t] || '#fff';
-        $('dvNadeType').textContent = NADE_LBL[f.t] || f.t;
+        $('dvNadeType').textContent = nadeLbl(f.t);
         $('dvNadeBy').textContent =
             (f.by || '?') + ' · ' + T('dv.round') + ' ' + (curRound + 1) + ' · ' + nadeTime(f.p[0][0]);
         nadePos.textContent = f.sp.join(' ');
@@ -769,7 +776,7 @@
     nadePop.addEventListener('click', e => { if (e.target === nadePop) closeNade(); });
     $('dvNadeCopy').addEventListener('click', () => {
         if (!nadeSel) return;
-        const cmd = `setpos ${nadeSel.sp.join(' ')};setang ${nadeSel.sa.join(' ')} 0`;
+        const cmd = tpLine(nadeSel);
         navigator.clipboard.writeText(cmd).then(
             () => { nadeNote.textContent = T('dv.np.copied'); },
             () => { nadeNote.textContent = cmd; });
@@ -789,6 +796,367 @@
             nadeNote.className = 'dv-nadepop-note is-err';
         });
     });
+
+    /* ── Cinematic nade review ──────────────────────────────────────────────
+     * The nade list answers "what went out this round". This answers "what
+     * lineups does this match contain": every throw in the demo, minus the
+     * repeats, played back as a shot — close on the thrower, freeze on the
+     * release with the teleport line, then ride the grenade.
+     *
+     * It is a mode over the viewer, not a second viewer. It borrows `cur`,
+     * `view` and `draw()`, drives them from its own clock, and puts all three
+     * back exactly as it found them on the way out.
+     */
+
+    /* Two throws are the same lineup when they are aimed the same way from the
+       same place. The aim identifies it: `sa` is read at the exact tick the
+       grenade appears, and players running a lineup repeat pitch and yaw to a
+       fraction of a degree. The spot drifts instead — a player stands wherever
+       the last step left them, and the collision hull is 32 units wide, so no
+       two people stand in exactly the same place.
+
+       Measured over a full match: of the 53 throw pairs that agree on aim to
+       within half a degree, their throw spots are a median of 17 units apart,
+       90% within 66. 72 covers that spread. The 32 this started at let a third
+       of those pairs through as "unique", including one player throwing the
+       same smoke twice from 33 units apart — missing the cut by a single unit.
+
+       Position still has to be checked rather than trusting the aim alone: the
+       same match holds two throws that share an aim from opposite ends of the
+       map, 2892 units apart. */
+    const CINE_POS_TOL = 72;      // world units between the two throwers' feet
+    const CINE_ANG_TOL = 3;       // degrees, applied to pitch and yaw alike
+
+    const CINE_LEAD = 1.5;        // seconds of run-up before the release
+    const CINE_HOLD = 1.1;        // seconds the teleport line stays up
+    const CINE_TAIL = 0.6;        // seconds held after the grenade lands
+    const CINE_MOVE = 0.75;       // seconds to travel from one subject to the next
+    const CINE_TAU  = 0.20;       // camera smoothing constant, seconds
+    const CINE_NEAR = 3.4;        // zoom while on the thrower
+    const CINE_FLY  = 2.4;        // zoom while chasing the grenade
+    const CINE_WIDE = 1.5;        // how far the travel shot is allowed to pull back
+
+    const ICO_PLAY  = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
+    const ICO_PAUSE = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>';
+
+    const cineOpenBtn = $('dvCineOpen'), cinePick = $('dvCinePick'), cineWrap = $('dvCine'),
+          cineCard = $('dvCineCard'), cineTp = $('dvCineTp'), cineTypeWrap = $('dvCineTypes');
+    const CINE_TYPES = ['smoke', 'flash', 'he', 'molotov'];
+    const cineSel = new Set(CINE_TYPES);
+    /* Which side threw it. Kept apart from the type filter because the two
+       questions are different ones: "show me smokes" and "show me what the T
+       side does" get asked separately, and a lineup only makes sense against the
+       side that runs it. */
+    const CINE_SIDES = ['t', 'ct'];
+    const cineSide = new Set(CINE_SIDES);
+
+    function cineSideOf(f) {
+        return f.tm == null ? null : (f.tm === 1 ? 'ct' : 't');
+    }
+    let cine = null;                        // null whenever the mode is off
+
+    const angGap = (a, b) => Math.abs(((b - a + 540) % 360) - 180);
+    const smooth = k => { const t = Math.min(1, Math.max(0, k)); return t * t * (3 - 2 * t); };
+
+    /** Earliest throw of a lineup wins and every later repeat is counted into
+     *  it. Deliberately blind to round and to side: what a shot hands over is a
+     *  setpos/setang line, and that line is the same line whoever stands on it.
+     *  Keying on round would make the whole pass a no-op — every repeat in this
+     *  match is in a later round — and keying on side changes nothing at all,
+     *  because the two sides never throw from the same ground. */
+    function cineReel(types, sides) {
+        const shots = [];
+        (D.flights || []).forEach((f, i) => {
+            if (!types.has(f.t) || !f.sp || !f.sa) return;
+            const sd = cineSideOf(f);
+            // A throw whose thrower could not be resolved has no side to match;
+            // it only rides along when neither side has been filtered out.
+            if (sd ? !sides.has(sd) : sides.size < CINE_SIDES.length) return;
+            const dup = shots.find(s => s.f.t === f.t
+                && (s.f.sp[0] - f.sp[0]) ** 2 + (s.f.sp[1] - f.sp[1]) ** 2
+                 + (s.f.sp[2] - f.sp[2]) ** 2 <= CINE_POS_TOL * CINE_POS_TOL
+                && angGap(s.f.sa[0], f.sa[0]) <= CINE_ANG_TOL
+                && angGap(s.f.sa[1], f.sa[1]) <= CINE_ANG_TOL);
+            if (dup) { dup.also.push(i); return; }
+            const throwF = f.p[0][0];
+            shots.push({
+                f: f, also: [], idx: cineThrower(f), throwF: throwF,
+                startF: Math.max(0, throwF - CINE_LEAD * D.fps),
+                endF: Math.min(D.nFrames - 1, f.p[f.p.length - 1][0] + CINE_TAIL * D.fps),
+                round: roundAt(Math.round(throwF)),
+            });
+        });
+        return shots;
+    }
+    function cineThrower(f) {
+        const byId = (D.players || []).findIndex(p => p && p.steamid === f.sid);
+        return byId >= 0 ? byId : (D.players || []).findIndex(p => p && p.name === f.by);
+    }
+
+    /* Both of these read the same interpolation `draw()` uses, so the camera
+       sits on top of the marker it follows instead of a frame behind it. */
+    function cinePlayerAt(idx, f) {
+        if (idx == null || idx < 0) return null;
+        const f0 = Math.max(0, Math.min(D.nFrames - 1, Math.floor(f)));
+        const f1 = Math.min(f0 + 1, D.nFrames - 1), tt = f - f0;
+        const a = D.frames[f0][idx], b = D.frames[f1][idx];
+        if (!a) return b ? [b[0], b[1]] : null;
+        if (!b) return [a[0], a[1]];
+        return [lerp(a[0], b[0], tt), lerp(a[1], b[1], tt)];
+    }
+    function cineFlightAt(fl, f) {
+        const p = fl.p;
+        if (f <= p[0][0]) return [p[0][1], p[0][2]];
+        let i = 0; while (i < p.length - 1 && p[i + 1][0] <= f) i++;
+        const a = p[i], b = p[Math.min(i + 1, p.length - 1)];
+        const tt = b[0] > a[0] ? (f - a[0]) / (b[0] - a[0]) : 0;
+        return [lerp(a[1], b[1], tt), lerp(a[2], b[2], tt)];
+    }
+    /** Where the thrower stood on the scoreboard at the moment of the throw —
+     *  the same running total the roster shows, not an end-of-match figure. */
+    function cineKda(idx, f) {
+        let k = 0, d = 0, a = 0;
+        for (const kl of D.kills) {
+            if (kl.f > f) continue;
+            if (kl.a === idx) k++;
+            if (kl.v === idx) d++;
+            if (kl.as === idx) a++;
+        }
+        return k + '/' + d + '/' + a;
+    }
+
+    cineTypeWrap.innerHTML = CINE_TYPES.map(t => {
+        const u = 'url(/static/weapon_icons/' + NADE_ICON[t] + '.png)';
+        return '<button class="dv-cine-ty" type="button" data-t="' + t + '" aria-pressed="true">' +
+            '<span class="dv-cine-ty-ic" style="-webkit-mask-image:' + u + ';mask-image:' + u +
+            ';background:' + FLY_COL[t] + '"></span>' +
+            '<span class="dv-cine-ty-l"></span><b class="dv-cine-ty-n"></b></button>';
+    }).join('');
+    const cineSideWrap = $('dvCineSides');
+    cineSideWrap.innerHTML = CINE_SIDES.map(s =>
+        '<button class="dv-cine-ty dv-cine-sd" type="button" data-s="' + s + '" aria-pressed="true">' +
+        '<span class="dv-cine-ty-ic is-dot" style="background:' + TEAM[s === 'ct' ? 1 : 0] + '"></span>' +
+        '<span class="dv-cine-ty-l"></span><b class="dv-cine-ty-n"></b></button>').join('');
+
+
+    function cinePickPaint() {
+        const n = cineReel(cineSel, cineSide).length;
+        const all = (D.flights || []).filter(f => cineSel.has(f.t)).length;
+        cineTypeWrap.querySelectorAll('.dv-cine-ty').forEach(b => {
+            const t = b.dataset.t, on = cineSel.has(t);
+            b.classList.toggle('is-on', on);
+            b.setAttribute('aria-pressed', on ? 'true' : 'false');
+            b.querySelector('.dv-cine-ty-l').textContent = nadeLbl(t);
+            // the badge counts that type on its own, so switching one off tells
+            // you exactly how many showings you just dropped
+            b.querySelector('.dv-cine-ty-n').textContent = cineReel(new Set([t]), cineSide).length;
+        });
+        cineSideWrap.querySelectorAll('.dv-cine-sd').forEach(b => {
+            const s = b.dataset.s, on = cineSide.has(s);
+            b.classList.toggle('is-on', on);
+            b.setAttribute('aria-pressed', on ? 'true' : 'false');
+            b.querySelector('.dv-cine-ty-l').textContent = T(s === 'ct' ? 'dv.cine.sideCt' : 'dv.cine.sideT');
+            b.querySelector('.dv-cine-ty-n').textContent = cineReel(cineSel, new Set([s])).length;
+        });
+        $('dvCineCount').textContent = n ? T('dv.cine.count', { n: n, all: all }) : T('dv.cine.none');
+        $('dvCineStart').disabled = !n;
+    }
+    function cinePickOpen(on) {
+        cinePick.style.display = on ? '' : 'none';
+        if (on) cinePickPaint();
+    }
+    cineOpenBtn.addEventListener('click', () => { if (D) cinePickOpen(true); });
+    $('dvCinePickX').addEventListener('click', () => cinePickOpen(false));
+    cinePick.addEventListener('click', e => { if (e.target === cinePick) cinePickOpen(false); });
+    cineTypeWrap.addEventListener('click', e => {
+        const b = e.target.closest('.dv-cine-ty');
+        if (!b) return;
+        cineSel.has(b.dataset.t) ? cineSel.delete(b.dataset.t) : cineSel.add(b.dataset.t);
+        cinePickPaint();
+    });
+    cineSideWrap.addEventListener('click', e => {
+        const b = e.target.closest('.dv-cine-sd');
+        if (!b) return;
+        cineSide.has(b.dataset.s) ? cineSide.delete(b.dataset.s) : cineSide.add(b.dataset.s);
+        cinePickPaint();
+    });
+    $('dvCineStart').addEventListener('click', cineEnter);
+
+    function cineEnter() {
+        const shots = cineReel(cineSel, cineSide);
+        if (!D || !shots.length) return;
+        const wasPlaying = playing;
+        pause();
+        cinePickOpen(false);
+        closeNade();
+        cine = {
+            shots: shots, at: 0, phase: 'move', pt: 0, paused: false, hover: false, token: 0,
+            // start from wherever the user was looking, so the first travel
+            // shot eases out of their view rather than cutting away from it
+            cam: { x: (cssSize / 2 - view.ox) / view.zoom / SC,
+                   y: (cssSize / 2 - view.oy) / view.zoom / SC, z: Math.max(1, view.zoom) },
+            from: null, to: null, dip: 0, last: performance.now(), raf: 0,
+            save: { zoom: view.zoom, ox: view.ox, oy: view.oy, cur: cur, curRound: curRound,
+                    playing: wasPlaying, focusIdx: focusIdx, level: level },
+        };
+        focusIdx = null;                   // this is what drops the white ring
+        cineWrap.hidden = false;
+        canvas.style.cursor = '';
+        cinePaintPlay();
+        cineGo(0);
+        cine.raf = requestAnimationFrame(cineLoop);
+    }
+
+    function cineExit() {
+        if (!cine) return;
+        cancelAnimationFrame(cine.raf);
+        const s = cine.save;
+        cine = null;                       // before the restore, or play() re-enters here
+        cineWrap.hidden = true;
+        cineCard.hidden = true; cineTp.hidden = true;
+        view.zoom = s.zoom; view.ox = s.ox; view.oy = s.oy;
+        focusIdx = s.focusIdx; curRound = s.curRound; cur = s.cur;
+        if (level !== s.level) { level = s.level; elFloor.textContent = level ? 'LOWER' : 'UPPER'; }
+        clampView();
+        canvas.style.cursor = view.zoom > 1 ? 'grab' : '';
+        renderKills(); renderNades();
+        draw(cur); updateHud();
+        if (s.playing) play();
+    }
+    $('dvCineExit').addEventListener('click', cineExit);
+    $('dvCinePrev').addEventListener('click', () => { if (cine) cineGo(Math.max(0, cine.at - 1)); });
+    $('dvCineNext').addEventListener('click', () => {
+        if (cine && cine.at + 1 < cine.shots.length) cineGo(cine.at + 1);
+    });
+    $('dvCinePlay').addEventListener('click', () => {
+        if (!cine) return;
+        cine.paused = !cine.paused; cinePaintPlay();
+    });
+    function cinePaintPlay() { $('dvCinePlay').innerHTML = cine && cine.paused ? ICO_PLAY : ICO_PAUSE; }
+    /* Holding the pointer over the line keeps the freeze open: the whole point
+       of the pause is that the text can be selected, and a second is not long
+       enough to drag across it. */
+    cineTp.addEventListener('mouseenter', () => { if (cine) cine.hover = true; });
+    cineTp.addEventListener('mouseleave', () => { if (cine) cine.hover = false; });
+
+    function cineGo(n) {
+        const s = cine.shots[n];
+        cine.at = n; cine.phase = 'move'; cine.pt = 0;
+        cur = s.startF;
+        if (D.hasLower) {
+            const e = D.frames[Math.round(s.throwF)][s.idx];
+            if (e) { level = e[6]; elFloor.textContent = level ? 'LOWER' : 'UPPER'; }
+        }
+        const p = cinePlayerAt(s.idx, s.startF);
+        cine.from = { x: cine.cam.x, y: cine.cam.y, z: cine.cam.z };
+        cine.to = { x: p ? p[0] : cine.cam.x, y: p ? p[1] : cine.cam.y, z: CINE_NEAR };
+        // the pull-back scales with how far the camera has to go: neighbouring
+        // lineups get a nudge, a cross-map move gets a proper establishing wide
+        const travel = Math.hypot(cine.to.x - cine.from.x, cine.to.y - cine.from.y) * SC;
+        cine.dip = Math.min(1, travel / (cssSize * 0.6));
+        cineTp.hidden = true;
+        cineCard.hidden = false;
+        cinePaintShot(s);
+    }
+
+    function cinePaintShot(s) {
+        const tok = ++cine.token, p = D.players[s.idx] || {};
+        $('dvCineN').textContent = (cine.at + 1) + ' / ' + cine.shots.length;
+        const lbl = $('dvCineLbl');
+        lbl.className = 'dv-cine-lbl ' + (s.f.tm === 1 ? 'ct' : 't');
+        lbl.textContent = nadeLbl(s.f.t) + ' · ' + T('dv.round') + ' ' + D.rounds[s.round].n;
+        const dup = $('dvCineDup');
+        dup.hidden = !s.also.length;
+        if (s.also.length) {
+            dup.textContent = '×' + (s.also.length + 1);
+            dup.title = T('dv.cine.dup', {
+                n: s.also.length + 1,
+                r: [s.round].concat(s.also.map(i => roundAt(Math.round(D.flights[i].p[0][0]))))
+                    .map(r => D.rounds[r].n).join(', '),
+            });
+        }
+        cineCard.className = 'dv-cine-card ' + (s.f.tm === 1 ? 'ct' : 't');
+        $('dvCineName').textContent = p.name || s.f.by || '?';
+        $('dvCineKda').textContent = cineKda(s.idx, s.throwF);
+        $('dvCineTpCode').textContent = tpLine(s.f);
+        const av = $('dvCineAv'), lvl = $('dvCineLvl');
+        av.className = 'dv-cine-av'; av.innerHTML = ''; av.dataset.initials = plInitials(p.name);
+        $('dvCineElo').textContent = ''; lvl.hidden = true;
+        playerAvatar(p.steamid).then(fp => {
+            if (!fp || !cine || tok !== cine.token) return;   // a later shot owns the card now
+            if (fp.elo) $('dvCineElo').textContent = fp.elo.toLocaleString('en-US') + ' ELO';
+            if (fp.lvl) { lvl.src = '/static/faceit_levels/' + fp.lvl + '.png'; lvl.hidden = false; }
+            if (!fp.url) return;
+            const im = new Image(); im.alt = '';
+            im.onload = () => { if (cine && tok === cine.token) { av.classList.add('has-img'); av.appendChild(im); } };
+            im.src = fp.url;
+        });
+    }
+
+    function cineLoop(ts) {
+        if (!cine) return;
+        // a tab switch parks rAF; without the clamp the reel jumps a shot ahead
+        const dt = Math.min(0.05, Math.max(0, (ts - cine.last) / 1000));
+        cine.last = ts;
+        const s = cine.shots[cine.at];
+
+        if (cine.phase === 'move') {
+            if (!cine.paused) cine.pt += dt;
+            const k = smooth(cine.pt / CINE_MOVE);
+            cine.cam.x = lerp(cine.from.x, cine.to.x, k);
+            cine.cam.y = lerp(cine.from.y, cine.to.y, k);
+            const z = lerp(cine.from.z, cine.to.z, k);
+            cine.cam.z = Math.max(CINE_WIDE, z - (z - CINE_WIDE) * cine.dip * 4 * k * (1 - k));
+            if (cine.pt >= CINE_MOVE) { cine.phase = 'lead'; cine.pt = 0; }
+        } else if (cine.phase !== 'end') {
+            let tx, ty, tz;
+            if (cine.phase === 'flight') {
+                if (!cine.paused) cur = Math.min(s.endF, cur + dt * D.fps);
+                const g = cineFlightAt(s.f, cur);
+                tx = g[0]; ty = g[1]; tz = CINE_FLY;
+            } else {
+                if (cine.phase === 'lead' && !cine.paused) cur = Math.min(s.throwF, cur + dt * D.fps);
+                if (cine.phase === 'hold' && !cine.paused && !cine.hover) cine.pt += dt;
+                const p = cinePlayerAt(s.idx, cur);
+                tx = p ? p[0] : cine.cam.x; ty = p ? p[1] : cine.cam.y; tz = CINE_NEAR;
+            }
+            // exponential ease: framerate-independent, and it never arrives with
+            // a step, which is the whole difference from a slideshow
+            const k = 1 - Math.exp(-dt / CINE_TAU);
+            cine.cam.x += (tx - cine.cam.x) * k;
+            cine.cam.y += (ty - cine.cam.y) * k;
+            cine.cam.z += (tz - cine.cam.z) * k;
+            cineAdvance(s);
+        }
+
+        view.zoom = Math.min(MAXZOOM, Math.max(1.02, cine.cam.z));
+        view.ox = cssSize / 2 - cine.cam.x * SC * view.zoom;
+        view.oy = cssSize / 2 - cine.cam.y * SC * view.zoom;
+        clampView();
+        draw(cur); updateHud();
+
+        if (!cineCard.hidden) {
+            const now = cine.shots[cine.at];          // cineAdvance may have moved on
+            const p = cinePlayerAt(now.idx, cur);
+            if (p) cineCard.style.transform = 'translate3d(' +
+                (view.ox + view.zoom * p[0] * SC).toFixed(1) + 'px,' +
+                (view.oy + view.zoom * p[1] * SC).toFixed(1) + 'px,0)';
+        }
+        cine.raf = requestAnimationFrame(cineLoop);
+    }
+
+    function cineAdvance(s) {
+        if (cine.phase === 'lead' && cur >= s.throwF) {
+            cine.phase = 'hold'; cine.pt = 0; cineTp.hidden = false;
+        } else if (cine.phase === 'hold' && cine.pt >= CINE_HOLD) {
+            cine.phase = 'flight'; cineTp.hidden = true; cineCard.hidden = true;
+        } else if (cine.phase === 'flight' && cur >= s.endF) {
+            if (cine.at + 1 < cine.shots.length) cineGo(cine.at + 1);
+            else { cine.phase = 'end'; cineCard.hidden = true; $('dvCineLbl').textContent = T('dv.cine.done'); }
+        }
+    }
+
+    $('dvImpact').addEventListener('click', cineExit);
 
     const gearBtn = $('dvGear'), settingsEl = $('dvSettings');
     function setSettings(open) {
@@ -1052,12 +1420,8 @@
     window.addEventListener('mousemove', e => { if (scrubbing) tlSeek(e.clientX); });
     window.addEventListener('mouseup', () => { scrubbing = false; });
 
-    function setPlayIcon() {
-        elPlay.innerHTML = playing
-            ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>'
-            : '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
-    }
-    function play() { if (playing || !D) return; if (cur >= D.nFrames - 1) cur = 0; playing = true; lastTs = performance.now(); setPlayIcon(); raf = requestAnimationFrame(loop); }
+    function setPlayIcon() { elPlay.innerHTML = playing ? ICO_PAUSE : ICO_PLAY; }
+    function play() { if (cine) cineExit(); if (playing || !D) return; if (cur >= D.nFrames - 1) cur = 0; playing = true; lastTs = performance.now(); setPlayIcon(); raf = requestAnimationFrame(loop); }
     function pause() { playing = false; setPlayIcon(); if (raf) cancelAnimationFrame(raf); voiceStopAll(); }
     elPlay.addEventListener('click', () => playing ? pause() : play());
     /* Was a button that cycled: to reach 0.5x from 2x you clicked through every
@@ -1109,11 +1473,13 @@
     }
 
     function seek(frame) {
+        if (cine) cineExit();
         cur = Math.min(D.nFrames - 1, Math.max(0, frame));
         voiceStopAll();
         draw(cur); updateHud();
     }
     function seekToRound(i) {
+        if (cine) cineExit();
         curRound = i; cur = D.rounds[i].start;
         renderKills(); renderNades(); draw(cur); updateHud();
     }
@@ -1611,6 +1977,22 @@
     document.addEventListener('keydown', e => {
         if (viewer.style.display === 'none' || !D) return;
         if (e.target.tagName === 'INPUT') return;
+        if (cinePick.style.display !== 'none') {
+            if (e.code === 'Escape') cinePickOpen(false);
+            return;
+        }
+        if (cine) {
+            switch (e.code) {
+                case 'Escape':                          cineExit(); break;
+                case 'Space':        e.preventDefault(); cine.paused = !cine.paused; cinePaintPlay(); break;
+                case 'ArrowRight':
+                case 'BracketRight': if (cine.at + 1 < cine.shots.length) cineGo(cine.at + 1); break;
+                case 'ArrowLeft':
+                case 'BracketLeft':  cineGo(Math.max(0, cine.at - 1)); break;
+                case 'KeyF':                             toggleFullscreen(); break;
+            }
+            return;
+        }
         switch (e.code) {
             case 'Space':        e.preventDefault(); playing ? pause() : play(); break;
             case 'ArrowRight':   seekToRound(Math.min(D.rounds.length - 1, roundAt(Math.floor(cur)) + 1)); break;
@@ -1622,6 +2004,20 @@
             case 'KeyF':         toggleFullscreen(); break;
             case 'KeyC':         if (pencilOn()) { e.preventDefault(); setDrawMode(!drawMode); } break;
             case 'KeyZ':         if (pencilOn()) { e.preventDefault(); clearDraw(); } break;
+        }
+    });
+
+    /* Everything built from JS holds a key rather than a string, so a language
+       flip has to repaint it — the two side lists, the nade card if it is open,
+       and whichever shot the reel is currently on. */
+    document.addEventListener('langchange', () => {
+        if (!D || viewer.style.display === 'none') return;
+        renderKills(); renderNades();
+        if (nadeSel) $('dvNadeType').textContent = nadeLbl(nadeSel.t);
+        if (cinePick.style.display !== 'none') cinePickPaint();
+        if (cine) {
+            if (cine.phase === 'end') $('dvCineLbl').textContent = T('dv.cine.done');
+            else cinePaintShot(cine.shots[cine.at]);
         }
     });
 })();
