@@ -347,14 +347,14 @@
         if (!ids.length) return;
         const rRoam = ranks(m, 'roam'), rIso = ranks(m, 'iso'),
               rHold = ranks(m, 'spotHold'), rDepth = ranks(m, 'depth'),
-              rMov = ranks(m, 'moving');
+              rMov = ranks(m, 'moving'), rSpeed = ranks(m, 'speed');
 
         for (const id of ids) {
             const v = m[id];
             const openRate = v.rounds ? (v.openK + v.openD) / v.rounds : 0;
             v.rank = {
                 roam: rRoam[id], iso: rIso[id], hold: rHold[id],
-                depth: rDepth[id], moving: rMov[id], openRate,
+                depth: rDepth[id], moving: rMov[id], speed: rSpeed[id], openRate,
             };
 
             // Reasons are stored as translation keys + params, not finished
@@ -666,7 +666,12 @@
         isolation:  v => v.rank.iso,
         depth:      v => v.rank.depth,
         repos:      v => v.moving,
-        pace:       v => v.rank.moving,
+        // PACE read the share of time spent moving — the same number REPOSITIONING
+        // shows raw, so the two bars moved together and said one thing twice. The
+        // median speed its tooltip promises was being computed all along and never
+        // read. Ranked within the side like every other bar here, because a speed
+        // in px/s means nothing against an absolute cutoff.
+        pace:       v => v.rank.speed,
         sniper:     v => Math.min(1, v.sniper * 4),
         duels:      v => Math.min(1, v.rank.openRate),
     };

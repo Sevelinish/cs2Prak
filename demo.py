@@ -35,7 +35,7 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 with open(os.path.join(_RADAR_DIR, 'calibration.json'), encoding='utf-8') as _f:
     CALIB = json.load(_f)
 
-_CACHE_VER = 'v15-bounce'
+_CACHE_VER = 'v16-voice'
 
 def cache_key(path):
     st  = os.stat(path)
@@ -1119,7 +1119,13 @@ def parse_demo(path, fps=8):
             SR  = 48000
             CAP = SR // 8
             PLC = SR * 20 // 1000
-            GAP = int(TICKRATE * 0.8)
+            # Where one clip ends and the next begins. Anything longer than this
+            # is a pause the player took, and a pause is cut rather than carried:
+            # a clip padded across it would be mostly silence, which would count
+            # as talk time in the scoreboard and light the speaking indicator for
+            # as long as the silence lasted. Under it, the hole is filled so the
+            # speech after it stays on the clock.
+            GAP = int(TICKRATE * 0.35)
             MIN = SR // 5 * 2
             # libopus is loaded as a CDLL, so opus_decode drops the GIL while it
             # runs — the only work in this whole parse a second thread can
@@ -1136,27 +1142,42 @@ def parse_demo(path, fps=8):
                         b'data' + _st.pack('<I', len(pcm)) + pcm)
 
             def _decode(utt):
-                """One utterance -> gain-corrected PCM, or None if it is too short
-                to be speech. Runs on a pool thread: the decoder state and the
-                output buffer are per-thread, libopus keeps no globals."""
+                """One utterance -> gain-corrected PCM laid out on the clock it was
+                spoken on, or None if it is too short to be speech. Runs on a pool
+                thread: the decoder state and the output buffer are per-thread,
+                libopus keeps no globals."""
                 buf = getattr(_tls, 'buf', None)
                 if buf is None:
                     buf = _tls.buf = (_ct.c_int16 * CAP)()
                 err = _ct.c_int()
                 dec = _opus.opus_decoder_create(SR, 1, _ct.byref(err))
-                parts, prev = [], None
+                parts, made, t0 = [], 0, utt[0][0]
                 for tk, cb in utt:
-                    if prev is not None:
-                        miss = round((tk - prev) / (TICKRATE * 0.02)) - 1
-                        for _ in range(max(0, min(miss, 10))):
-                            ns = _lopus.opus_decode(dec, None, 0, buf, PLC, 0)
-                            if ns > 0:
+                    # Where this packet belongs on the clock, rather than wherever
+                    # the previous one happened to end. The old code assumed every
+                    # packet was 20 ms and capped the catch-up at ten frames, so a
+                    # pause longer than 200 ms collapsed and everything after it
+                    # ran ahead of the picture for the rest of the utterance.
+                    want = int((tk - t0) / TICKRATE * SR)
+                    if want > made:
+                        # Concealment invents plausible speech, which is right for
+                        # a packet or two lost in transit and wrong for a pause the
+                        # player actually took. Past 40 ms it is silence.
+                        if want - made <= PLC * 2:
+                            while made < want:
+                                ns = _lopus.opus_decode(dec, None, 0, buf, PLC, 0)
+                                if ns <= 0:
+                                    break
                                 parts.append(bytes((_ct.c_int16 * ns).from_buffer(buf, 0)))
+                                made += ns
+                        if made < want:
+                            parts.append(bytes(2 * (want - made)))
+                            made = want
                     arr = (_ct.c_ubyte * len(cb)).from_buffer_copy(cb)
                     ns = _lopus.opus_decode(dec, arr, len(cb), buf, CAP, 0)
                     if ns > 0:
                         parts.append(bytes((_ct.c_int16 * ns).from_buffer(buf, 0)))
-                    prev = tk
+                        made += ns
                 _opus.opus_decoder_destroy(dec)
                 pcm = b''.join(parts)
                 if len(pcm) < MIN:
@@ -1203,10 +1224,21 @@ def parse_demo(path, fps=8):
                     for (idx, utt), pcm in zip(batch, _ex.map(_decode, [u for _, u in batch])):
                         if pcm is None:
                             continue
+                        # Fractional: rounding a clip onto the 8 fps grid moved it
+                        # by up to 62 ms, and speech landing that far from the
+                        # picture is heard as being out of sync.
+                        ff = round((utt[0][0] - start_tick) / step, 2)
+                        # The timeline starts at the live match, so anything said
+                        # before it has nowhere to play. Decided before the file is
+                        # written, not after: the old code clamped these clips onto
+                        # frame 0 and piled every word of warmup chat onto the
+                        # first moment of the demo.
+                        if ff < 0 or ff > n_frames - 1:
+                            continue
                         with open(os.path.join(vdir, f'{n}.wav'), 'wb') as wf:
                             wf.write(_wav(pcm))
-                        ff = t2f(utt[0][0])
-                        e0 = frames[ff][idx] if 0 <= ff < n_frames else None
+                        fi = min(n_frames - 1, max(0, int(round(ff))))
+                        e0 = frames[fi][idx] if n_frames else None
                         side = e0[4] if e0 else (1 if idx in teamA else 0)
                         voice.append({'idx': idx, 'n': n, 'f': ff,
                                       'dur': round(len(pcm) / 2 / SR, 2), 'side': side})

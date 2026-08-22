@@ -631,7 +631,7 @@ document.getElementById('osLabelLin').addEventListener('click', () => {
 
 _syncOSLabels();
 
-/* Alternate themes are off until 1.1.7 — they never got the contrast pass the
+/* Alternate themes are off until they get the contrast pass — they never got the contrast pass the
    dark palette had, so half the analytics screens read badly on them. Forcing
    dark here (and not just hiding the picker) matters: anyone who already chose
    rose or slate has it in localStorage and would otherwise be stuck on a theme

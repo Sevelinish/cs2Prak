@@ -363,7 +363,7 @@ def build_overlay_from_existing(log: list):
     if src_drive != dst_drive:
         raise RuntimeError(
             f'cs2prak is on {dst_drive} but CS2 is on {src_drive}. Hardlinks need the '
-            f'same drive — move cs2prak onto {src_drive}, or use the 64 GB Download instead.')
+            f'same drive — move cs2prak onto {src_drive} and build the server again.')
 
     def junction(link, target):
         subprocess.run(['cmd', '/c', 'mklink', '/J', link, target],

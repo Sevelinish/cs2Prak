@@ -134,7 +134,7 @@
                             <button class="btn-skin-editor" id="loadSkinsBtn">
                                 <div class="bse-text">
                                     <span class="bse-label" data-i18n="skins.editor">OPEN SKIN EDITOR</span>
-                                    <span class="bse-sub" data-i18n="skins.editorSub">Configure weapon skins, knives &amp; gloves</span>
+                                    <span class="bse-sub" data-i18n="skins.editorSub">Configure weapon skins, knives, gloves &amp; agents</span>
                                 </div>
                             </button>
                             <button class="btn-skin-editor btn-hltv-import" id="importHltvBtn">
@@ -296,7 +296,7 @@
                                         </button>
                                         <button class="dv-impact dv-cine-open" id="dvCineOpen" data-i18n="dv.cine.btnTitle" data-i18n-attr="title" title="Play back every unique grenade lineup in this match">
                                             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="square"><rect x="2" y="4" width="20" height="16"/><path d="M7 4v16M17 4v16M2 12h20"/></svg>
-                                            <span data-i18n="dv.cine.btn">EXPECT MATCH NADES</span>
+                                            <span data-i18n="dv.cine.btn">REVIEW MATCH NADES</span>
                                         </button>
                                         <button class="dv-floor" id="dvFloor" style="display:none">UPPER</button>
                                         <div class="dv-settings-wrap">
@@ -407,7 +407,7 @@
                                         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6z"/></svg>
                                     </button>
                                     <div class="dv-spd" id="dvSpeedWrap">
-                                        <button class="dv-speed" id="dvSpeed" type="button" aria-haspopup="listbox" aria-expanded="false" data-i18n="dv.tp.speed" data-i18n-attr="title" title="Playback speed">1×<i class="dv-spd-caret" aria-hidden="true"></i></button>
+                                        <button class="dv-speed" id="dvSpeed" type="button" aria-haspopup="listbox" aria-expanded="false" data-i18n="dv.tp.speed" data-i18n-attr="title" title="Playback speed — click to pick 0.25× 0.5× 1× 2× 4×">1×<i class="dv-spd-caret" aria-hidden="true"></i></button>
                                         <div class="dv-spd-menu" id="dvSpeedMenu" role="listbox" hidden></div>
                                     </div>
                                     <div class="dv-timeline" id="dvTimeline">
@@ -418,7 +418,7 @@
                                     </div>
                                     <span class="dv-elapsed" id="dvElapsed">0:00<i>/</i>0:00</span>
                                 </div>
-                                <div class="dv-legend" data-i18n="demo.legend">SCROLL zoom · DRAG pan · CLICK player → setpos · C draw · Z clear · F fullscreen</div>
+                                <div class="dv-legend" data-i18n="demo.legend">SCROLL zoom · DRAG pan · CLICK a player while paused → sends you there in game (exec expPos) · C draw · Z clear · F fullscreen</div>
                                 <div class="dv-nadepop" id="dvNadePop" style="display:none">
                                     <div class="dv-nadepop-box">
                                         <button class="dv-nadepop-x" id="dvNadeClose" aria-label="Close">✕</button>
@@ -514,7 +514,7 @@
                             <div class="set-card">
                                 <div class="set-card-head">
                                     <span class="set-card-title" data-i18n="settings.updates">Updates</span>
-                                    <span class="set-card-sub" data-i18n="settings.updatesSub">The app checks for updates on launch and installs them on restart.</span>
+                                    <span class="set-card-sub" data-i18n="settings.updatesSub">The app checks for updates on launch. It downloads only when you accept, and installs on the next restart.</span>
                                 </div>
                                 <div class="set-card-controls">
                                     <span class="set-upd-status" id="setUpdStatus"></span>
@@ -594,7 +594,7 @@
                                     <button class="dv-seg-btn" data-theme="rose" role="radio" aria-checked="false" data-i18n="settings.themePink">Soft Pink</button>
                                     <button class="dv-seg-btn" data-theme="slate" role="radio" aria-checked="false" data-i18n="settings.themeBlue">Blue-Gray</button>
                                 </div>
-                                <p class="set-locked-note" data-i18n="settings.themeLocked">Alternate palettes are being reworked and return in 1.1.7. Only the dark theme ships for now.</p>
+                                <p class="set-locked-note" data-i18n="settings.themeLocked">Alternate palettes are being reworked. Only the dark theme ships for now.</p>
                             </div>
                             <div class="set-card set-card-danger" id="uninstallCard">
                                 <div class="set-card-head">
@@ -895,7 +895,7 @@
             </div>
         </div>
     </div>
-    <script src="/static/i18n.js?v=134"></script>
+    <script src="/static/i18n.js?v=135"></script>
     <script src="/static/script.js?v=93"></script>
     <script src="/static/skinpicker.js?v=103"></script>
     <script src="/static/binds.js?v=101"></script>
@@ -927,8 +927,8 @@
         </div>
     </div>
     <script src="/static/weapons.js?v=116"></script>
-    <script src="/static/impact.js?v=45"></script>
-    <script src="/static/demo.js?v=107"></script>
+    <script src="/static/impact.js?v=46"></script>
+    <script src="/static/demo.js?v=109"></script>
     <script src="/static/statistics.js?v=118"></script>
     <script src="/static/advanced.js?v=119"></script>
     <script src="/static/tutorial.js?v=100"></script>

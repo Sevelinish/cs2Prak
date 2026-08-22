@@ -380,7 +380,7 @@
         view = { zoom: 1, ox: 0, oy: 0 }; canvas.style.cursor = '';
         radar = null; lowerRadar = null;
         setDrawMode(false); clearDraw();
-        canvas.title = 'Scroll: zoom · drag: pan · Space: play/pause · ←/→: round · [ ]: kill · , .: frame · F: fullscreen · click a player when paused: sends you there in game (exec expPos)';
+        canvas.title = T('demo.keys');
 
         elMap.textContent = (D.map || '').replace(/^de_/, '').toUpperCase();
         setMapThumb(elMapThumb, D.map);
@@ -1307,22 +1307,42 @@
         });
         if (voiceMode === 0) voiceStopAll();
     });
-    function voiceWant(u) {
-        if (voiceMode === 0 || !playing) return false;
-        if (voiceMode === 2 && u.side !== 1) return false;     
-        if (voiceMode === 3 && u.side !== 0) return false;     
-        return cur >= u.f && cur < u.f + u.dur * D.fps;
+    function voiceSideOk(u) {
+        if (voiceMode === 0) return false;
+        if (voiceMode === 2 && u.side !== 1) return false;
+        if (voiceMode === 3 && u.side !== 0) return false;
+        return true;
     }
+    function voiceWant(u) {
+        return voiceSideOk(u) && playing && cur >= u.f && cur < u.f + u.dur * D.fps;
+    }
+    /* Fetched ahead of the moment it is due. Creating the element only when the
+       clip should already be playing meant the first syllables were still coming
+       over the wire while the clock ran past them, which is what made speech
+       sound clipped and late. */
+    const VOICE_LEAD = 1.5;
     function voiceTick() {
         if (!D || !D.voice || !D.voice.length || voiceMode === 0) return;
+        const rate = SPEEDS[speedIdx];
         for (const u of D.voice) {
-            const want = voiceWant(u);
             let a = voiceAudios[u.n];
-            if (want) {
-                if (!a) { a = new Audio('/api/demo/voice/' + D.key + '/' + u.n + '.wav'); voiceAudios[u.n] = a; }
-                a.playbackRate = SPEEDS[speedIdx];
-                if (a.paused) { try { a.currentTime = Math.max(0, (cur - u.f) / D.fps); } catch (e) {} a.play().catch(() => {}); }
-            } else if (a && !a.paused) { a.pause(); }
+            if (!a) {
+                if (!playing || !voiceSideOk(u)) continue;
+                if (cur < u.f - VOICE_LEAD * D.fps || cur >= u.f + u.dur * D.fps) continue;
+                a = voiceAudios[u.n] = new Audio('/api/demo/voice/' + D.key + '/' + u.n + '.wav');
+                a.preload = 'auto';
+            }
+            if (voiceWant(u)) {
+                // writing playbackRate every frame restarts the media pipeline on
+                // some builds; it only ever changes when the speed control does
+                if (a.playbackRate !== rate) a.playbackRate = rate;
+                if (a.paused) {
+                    try { a.currentTime = Math.max(0, (cur - u.f) / D.fps); } catch (e) {}
+                    a.play().catch(() => {});
+                }
+            } else if (!a.paused) {
+                a.pause();
+            }
         }
     }
     function voiceStopAll() { for (const k in voiceAudios) { try { voiceAudios[k].pause(); } catch (e) {} } }
@@ -2132,6 +2152,7 @@
        and whichever shot the reel is currently on. */
     document.addEventListener('langchange', () => {
         if (!D || viewer.style.display === 'none') return;
+        canvas.title = T('demo.keys');
         renderKills(); renderNades();
         if (nadeSel) $('dvNadeType').textContent = nadeLbl(nadeSel.t);
         if (cinePick.style.display !== 'none') cinePickPaint();
