@@ -1118,7 +1118,6 @@ def parse_demo(path, fps=8):
 
             SR  = 48000
             CAP = SR // 8
-            PLC = SR * 20 // 1000
             # Where one clip ends and the next begins. Anything longer than this
             # is a pause the player took, and a pause is cut rather than carried:
             # a clip padded across it would be mostly silence, which would count
@@ -1126,6 +1125,7 @@ def parse_demo(path, fps=8):
             # as long as the silence lasted. Under it, the hole is filled so the
             # speech after it stays on the clock.
             GAP = int(TICKRATE * 0.35)
+            JITTER = int(SR * 0.04)   # 40 ms: above the drift, far below a real pause
             MIN = SR // 5 * 2
             # libopus is loaded as a CDLL, so opus_decode drops the GIL while it
             # runs — the only work in this whole parse a second thread can
@@ -1153,26 +1153,21 @@ def parse_demo(path, fps=8):
                 dec = _opus.opus_decoder_create(SR, 1, _ct.byref(err))
                 parts, made, t0 = [], 0, utt[0][0]
                 for tk, cb in utt:
-                    # Where this packet belongs on the clock, rather than wherever
-                    # the previous one happened to end. The old code assumed every
-                    # packet was 20 ms and capped the catch-up at ten frames, so a
-                    # pause longer than 200 ms collapsed and everything after it
-                    # ran ahead of the picture for the rest of the utterance.
+                    # A packet carries 10 ms of speech but the tick it is stamped
+                    # with is 15.6 ms wide, so inside continuous speech the clock
+                    # and the audio drift against each other by a tick either way:
+                    # measured over a match, half the packets sit within 0.6 ms and
+                    # nine in ten within 10 ms. Filling that difference chopped
+                    # running speech into fragments a few milliseconds apart and
+                    # stretched every clip — 168 s of silence poured into 120 clips
+                    # where only 89 s of it was real. A genuine pause is nothing
+                    # like that small: the next percentile up is 156 ms. So only a
+                    # shortfall past the jitter counts as time the player was
+                    # silent, and everything under it is left to run on.
                     want = int((tk - t0) / TICKRATE * SR)
-                    if want > made:
-                        # Concealment invents plausible speech, which is right for
-                        # a packet or two lost in transit and wrong for a pause the
-                        # player actually took. Past 40 ms it is silence.
-                        if want - made <= PLC * 2:
-                            while made < want:
-                                ns = _lopus.opus_decode(dec, None, 0, buf, PLC, 0)
-                                if ns <= 0:
-                                    break
-                                parts.append(bytes((_ct.c_int16 * ns).from_buffer(buf, 0)))
-                                made += ns
-                        if made < want:
-                            parts.append(bytes(2 * (want - made)))
-                            made = want
+                    if want - made >= JITTER:
+                        parts.append(bytes(2 * (want - made)))
+                        made = want
                     arr = (_ct.c_ubyte * len(cb)).from_buffer_copy(cb)
                     ns = _lopus.opus_decode(dec, arr, len(cb), buf, CAP, 0)
                     if ns > 0:
@@ -1183,11 +1178,13 @@ def parse_demo(path, fps=8):
                 if len(pcm) < MIN:
                     return None
                 _a = _np.frombuffer(pcm, dtype=_np.int16).astype(_np.float32)
-                _rms = float(_np.sqrt(_np.mean(_a * _a))) if _a.size else 0.0
-                if _rms >= 1.0:
-                    _peak = float(_np.max(_np.abs(_a))) or 1.0
-                    _gain = min(2400.0 / _rms, 30000.0 / _peak, 8.0)
-                    pcm = _np.clip(_a * _gain, -32768, 32767).astype('<i2').tobytes()
+                # A mic that is open but quiet still transmits, and those packets
+                # decode to digital silence: 6% of the clips in a match peaked at 1
+                # against a 32767 scale. Nothing to hear, yet each one lit the
+                # speaking indicator and counted towards talk time. The length gate
+                # above cannot see it — it only knows how long the clip is.
+                if _a.size and float(_np.max(_np.abs(_a))) < 16.0:
+                    return None
                 return pcm
 
             bysid = _dd(list)
@@ -1199,7 +1196,7 @@ def parse_demo(path, fps=8):
                 try: os.remove(os.path.join(vdir, f))
                 except OSError: pass
 
-            utts = []
+            by_player = _dd(list)
             for sid, chunks in bysid.items():
                 idx = sid2i.get(sid)
                 if idx is None:
@@ -1210,38 +1207,71 @@ def parse_demo(path, fps=8):
                     j = i
                     while j + 1 < len(chunks) and chunks[j + 1][0] - chunks[j][0] <= GAP:
                         j += 1
-                    utts.append((idx, chunks[i:j + 1]))
+                    by_player[idx].append(chunks[i:j + 1])
                     i = j + 1
+
+            FADE = SR // 200        # 5 ms
+
+            KNEE, CEIL = 22000.0, 32000.0
+
+            def _finish(pcm, gain):
+                """Apply the player's gain, hold the rare transient down and take the
+                edges to zero. One clip in five used to end on a sample of a thousand
+                or more, and cutting a waveform mid-swing is heard as a click."""
+                a = _np.frombuffer(pcm, dtype=_np.int16).astype(_np.float32) * gain
+                # Above the knee the curve bends towards the ceiling instead of
+                # squaring off against it. It catches the 0.1% of samples the gain
+                # above is set to overshoot, and squaring those off is the harshest
+                # thing that can be done to speech.
+                hot = _np.abs(a) > KNEE
+                if hot.any():
+                    over = (_np.abs(a[hot]) - KNEE) / (CEIL - KNEE)
+                    a[hot] = _np.sign(a[hot]) * (KNEE + (CEIL - KNEE) * _np.tanh(over))
+                if a.size > FADE * 2:
+                    ramp = _np.linspace(0.0, 1.0, FADE, dtype=_np.float32)
+                    a[:FADE] *= ramp
+                    a[-FADE:] *= ramp[::-1]
+                return _np.clip(a, -32768, 32767).astype('<i2').tobytes()
+
             n = 0
             with _Pool(max_workers=min(4, os.cpu_count() or 1)) as _ex:
-                # map() hands results back in submission order, so the .wav
-                # numbering is the one this produced utterance by utterance.
-                # A batch at a time rather than all 945: the decoded audio is
-                # ~180 KB per utterance and holding the whole match at once
-                # would put 170 MB on the heap for nothing.
-                for b in range(0, len(utts), 64):
-                    batch = utts[b:b + 64]
-                    for (idx, utt), pcm in zip(batch, _ex.map(_decode, [u for _, u in batch])):
-                        if pcm is None:
-                            continue
-                        # Fractional: rounding a clip onto the 8 fps grid moved it
-                        # by up to 62 ms, and speech landing that far from the
-                        # picture is heard as being out of sync.
+                # One player at a time. Their mic level does not change over a match,
+                # so a single gain keeps a shout louder than a whisper — normalising
+                # every clip on its own flattened that away and made each clip
+                # boundary a step in volume. Holding one player's audio costs ~15 MB;
+                # holding the match would cost 170.
+                for idx in sorted(by_player):
+                    plist = by_player[idx]
+                    pcms = list(_ex.map(_decode, plist))
+                    kept = [(u, p) for u, p in zip(plist, pcms) if p]
+                    if not kept:
+                        continue
+                    whole = _np.frombuffer(b''.join(p for _, p in kept), dtype=_np.int16).astype(_np.float32)
+                    rms = float(_np.sqrt(_np.mean(whole * whole))) if whole.size else 0.0
+                    # Set the level by what the player normally sounds like, not by
+                    # their single loudest sample of the match: measured over this
+                    # match the absolute peak sits two to four times above the
+                    # 99.9th percentile, so pinning the ceiling to it left every
+                    # word 8 dB quieter than it needed to be. The handful of samples
+                    # that then overshoot are caught by the knee in _finish.
+                    loud = float(_np.percentile(_np.abs(whole), 99.9)) if whole.size else 0.0
+                    gain = min(2400.0 / rms, 26000.0 / max(1.0, loud), 8.0) if rms >= 1.0 else 1.0
+                    for utt, pcm in kept:
                         ff = round((utt[0][0] - start_tick) / step, 2)
                         # The timeline starts at the live match, so anything said
-                        # before it has nowhere to play. Decided before the file is
-                        # written, not after: the old code clamped these clips onto
-                        # frame 0 and piled every word of warmup chat onto the
-                        # first moment of the demo.
+                        # before it has nowhere to play. The old code clamped such
+                        # clips onto frame 0 and piled every word of warmup chat
+                        # onto the first moment of the demo.
                         if ff < 0 or ff > n_frames - 1:
                             continue
+                        clip = _finish(pcm, gain)
                         with open(os.path.join(vdir, f'{n}.wav'), 'wb') as wf:
-                            wf.write(_wav(pcm))
+                            wf.write(_wav(clip))
                         fi = min(n_frames - 1, max(0, int(round(ff))))
                         e0 = frames[fi][idx] if n_frames else None
                         side = e0[4] if e0 else (1 if idx in teamA else 0)
                         voice.append({'idx': idx, 'n': n, 'f': ff,
-                                      'dur': round(len(pcm) / 2 / SR, 2), 'side': side})
+                                      'dur': round(len(clip) / 2 / SR, 2), 'side': side})
                         n += 1
             voice.sort(key=lambda u: u['f'])
         except Exception:
