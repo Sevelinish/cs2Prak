@@ -770,7 +770,7 @@ const I18N = {
     'dv.cine.start':    'НАЧАТЬ',
     'dv.cine.sideT':  'ЗА Т',
     'dv.cine.sideCt': 'ЗА КТ',
-    'dv.cine.count':    '{n} уникальных раскидок из {all} бросков',
+    'dv.cine.count':    '{n} уникальных раскидок · всего бросков: {all}',
     'dv.cine.none':     'Ничего не выбрано — укажите тип гранаты и сторону',
     'dv.cine.exit':     'ВЫХОД',
     'dv.cine.prev':     'Предыдущая раскидка  (←)',

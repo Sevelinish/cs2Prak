@@ -853,6 +853,28 @@
     function cineSideOf(f) {
         return f.tm == null ? null : (f.tm === 1 ? 'ct' : 't');
     }
+
+    /* Whose lineups to watch. An empty set means everyone, which keeps "no
+       filter" as the resting state instead of ten entries that all have to stay
+       ticked. The chips are built when the picker opens, not at startup: the
+       roster only exists once a demo is loaded. */
+    const cinePlayerSel = new Set();
+    const cinePlayerWrap = $('dvCinePlayers');
+
+    function cineSidOf(f) {
+        if (f.sid) return String(f.sid);
+        const p = (D.players || [])[cineThrower(f)];
+        return p && p.steamid ? String(p.steamid) : '';
+    }
+
+    function cinePlayersRender() {
+        cinePlayerWrap.innerHTML = ((D && D.players) || []).map(p => {
+            const sid = String(p.steamid || '');
+            return '<button class="dv-cine-ty dv-cine-pl" type="button" data-sid="' + sid +
+                '"><span class="dv-cine-ty-l">' + esc(p.name || '?') +
+                '</span><b class="dv-cine-ty-n"></b></button>';
+        }).join('');
+    }
     let cine = null;                        // null whenever the mode is off
 
     const angGap = (a, b) => Math.abs(((b - a + 540) % 360) - 180);
@@ -864,10 +886,11 @@
      *  Keying on round would make the whole pass a no-op — every repeat in this
      *  match is in a later round — and keying on side changes nothing at all,
      *  because the two sides never throw from the same ground. */
-    function cineReel(types, sides) {
+    function cineReel(types, sides, players) {
         const shots = [];
         (D.flights || []).forEach((f, i) => {
             if (!types.has(f.t) || !f.sp || !f.sa) return;
+            if (players && players.size && !players.has(cineSidOf(f))) return;
             const sd = cineSideOf(f);
             // A throw whose thrower could not be resolved has no side to match;
             // it only rides along when neither side has been filtered out.
@@ -935,12 +958,13 @@
     const cineSideWrap = $('dvCineSides');
     cineSideWrap.innerHTML = CINE_SIDES.map(s =>
         '<button class="dv-cine-ty dv-cine-sd" type="button" data-s="' + s + '" aria-pressed="true">' +
-        '<span class="dv-cine-ty-ic is-dot" style="background:' + TEAM[s === 'ct' ? 1 : 0] + '"></span>' +
+        '<span class="dv-cine-ty-ic" style="-webkit-mask-image:url(/static/cs2_icons/' + s +
+        '.svg);mask-image:url(/static/cs2_icons/' + s + '.svg);background:' + TEAM[s === 'ct' ? 1 : 0] + '"></span>' +
         '<span class="dv-cine-ty-l"></span><b class="dv-cine-ty-n"></b></button>').join('');
 
 
     function cinePickPaint() {
-        const n = cineReel(cineSel, cineSide).length;
+        const n = cineReel(cineSel, cineSide, cinePlayerSel).length;
         const all = (D.flights || []).filter(f => cineSel.has(f.t)).length;
         cineTypeWrap.querySelectorAll('.dv-cine-ty').forEach(b => {
             const t = b.dataset.t, on = cineSel.has(t);
@@ -949,21 +973,33 @@
             b.querySelector('.dv-cine-ty-l').textContent = nadeLbl(t);
             // the badge counts that type on its own, so switching one off tells
             // you exactly how many showings you just dropped
-            b.querySelector('.dv-cine-ty-n').textContent = cineReel(new Set([t]), cineSide).length;
+            b.querySelector('.dv-cine-ty-n').textContent = cineReel(new Set([t]), cineSide, cinePlayerSel).length;
         });
         cineSideWrap.querySelectorAll('.dv-cine-sd').forEach(b => {
             const s = b.dataset.s, on = cineSide.has(s);
             b.classList.toggle('is-on', on);
             b.setAttribute('aria-pressed', on ? 'true' : 'false');
             b.querySelector('.dv-cine-ty-l').textContent = T(s === 'ct' ? 'dv.cine.sideCt' : 'dv.cine.sideT');
-            b.querySelector('.dv-cine-ty-n').textContent = cineReel(cineSel, new Set([s])).length;
+            b.querySelector('.dv-cine-ty-n').textContent = cineReel(cineSel, new Set([s]), cinePlayerSel).length;
+        });
+        cinePlayerWrap.querySelectorAll('.dv-cine-pl').forEach(b => {
+            const sid = b.dataset.sid, on = !cinePlayerSel.size || cinePlayerSel.has(sid);
+            b.classList.toggle('is-on', on);
+            b.setAttribute('aria-pressed', on ? 'true' : 'false');
+            b.querySelector('.dv-cine-ty-n').textContent =
+                cineReel(cineSel, cineSide, new Set([sid])).length;
         });
         $('dvCineCount').textContent = n ? T('dv.cine.count', { n: n, all: all }) : T('dv.cine.none');
         $('dvCineStart').disabled = !n;
     }
     function cinePickOpen(on) {
         cinePick.style.display = on ? '' : 'none';
-        if (on) cinePickPaint();
+        if (!on) return;
+        // The roster belongs to the demo on screen, so the chips are rebuilt on
+        // every open and any selection left over from another demo is dropped.
+        cinePlayersRender();
+        cinePlayerSel.clear();
+        cinePickPaint();
     }
     cineOpenBtn.addEventListener('click', () => { if (D) cinePickOpen(true); });
     $('dvCinePickX').addEventListener('click', () => cinePickOpen(false));
@@ -974,6 +1010,19 @@
         cineSel.has(b.dataset.t) ? cineSel.delete(b.dataset.t) : cineSel.add(b.dataset.t);
         cinePickPaint();
     });
+    cinePlayerWrap.addEventListener('click', e => {
+        const b = e.target.closest('.dv-cine-pl');
+        if (!b) return;
+        const sid = b.dataset.sid;
+        // First click on a full roster means "only this one" rather than
+        // "everyone except this one", which is what a set of ten minus one would
+        // have meant and never what anybody wants from a filter like this.
+        if (!cinePlayerSel.size) cinePlayerSel.add(sid);
+        else if (cinePlayerSel.has(sid)) cinePlayerSel.delete(sid);
+        else cinePlayerSel.add(sid);
+        cinePickPaint();
+    });
+
     cineSideWrap.addEventListener('click', e => {
         const b = e.target.closest('.dv-cine-sd');
         if (!b) return;
@@ -983,7 +1032,7 @@
     $('dvCineStart').addEventListener('click', cineEnter);
 
     function cineEnter() {
-        const shots = cineReel(cineSel, cineSide);
+        const shots = cineReel(cineSel, cineSide, cinePlayerSel);
         if (!D || !shots.length) return;
         const wasPlaying = playing;
         pause();
@@ -1138,9 +1187,15 @@
         if (!cineCard.hidden) {
             const now = cine.shots[cine.at];          // cineAdvance may have moved on
             const p = cinePlayerAt(now.idx, cur);
-            if (p) cineCard.style.transform = 'translate3d(' +
-                (view.ox + view.zoom * p[0] * SC).toFixed(1) + 'px,' +
-                (view.oy + view.zoom * p[1] * SC).toFixed(1) + 'px,0)';
+            if (p) {
+                // The card hangs off the player, so a thrower standing near an
+                // edge would push it past the canvas and cut the name in half.
+                // Held inside by its own half-width instead of by a guess.
+                const half = cineCard.firstElementChild.offsetWidth / 2 + 6;
+                const x = Math.min(cssSize - half, Math.max(half, view.ox + view.zoom * p[0] * SC));
+                cineCard.style.transform = 'translate3d(' + x.toFixed(1) + 'px,' +
+                    (view.oy + view.zoom * p[1] * SC).toFixed(1) + 'px,0)';
+            }
         }
         cine.raf = requestAnimationFrame(cineLoop);
     }
