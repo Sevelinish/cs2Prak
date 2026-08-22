@@ -3804,8 +3804,53 @@ body::before { content: none; }
 
 .dv-cine-sides { margin-top: 6px; }
 
-/* Ten names do not fit the two-column grid the four grenade types use, and a
-   name is wider than an icon and a count, so the roster gets its own flow. */
-.dv-cine-players { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-.dv-cine-players .dv-cine-pl { flex: 0 1 auto; padding: 5px 9px; gap: 7px; }
-.dv-cine-players .dv-cine-ty-l { max-width: 11ch; overflow: hidden; text-overflow: ellipsis; }
+
+/* Roster sheet: pick whose lineups to watch by face rather than by name. */
+.dv-pchoose { z-index: 600; }
+.dv-pchoose-in {
+    width: min(860px, 92vw); max-height: 86vh; display: flex; flex-direction: column;
+    background: var(--surface); border: 1px solid var(--line-strong);
+    box-shadow: 0 18px 50px rgba(0,0,0,0.6);
+}
+.dv-pchoose-head { display: flex; align-items: baseline; gap: var(--sp-3); padding: 16px 18px 10px; }
+.dv-pchoose-t { font-family: var(--font-head); font-weight: 700; font-size: var(--fs-sm); letter-spacing: 2px; color: var(--paper-100); }
+.dv-pchoose-hint { font-size: var(--fs-2xs); color: var(--text-muted); }
+.dv-pchoose-head .dv-nadepop-x { margin-left: auto; position: static; }
+.dv-pchoose-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: var(--sp-2); padding: 4px 18px 16px; overflow-y: auto;
+}
+.dv-pchoose-foot { display: flex; justify-content: flex-end; gap: var(--sp-2); padding: 12px 18px 16px; border-top: 1px solid var(--line); }
+
+.dv-pcard {
+    display: flex; align-items: center; gap: var(--sp-2); text-align: left;
+    padding: 9px 12px 9px 9px; cursor: pointer;
+    background: var(--surface-2); border: 1px solid var(--line);
+    transition: border-color var(--t), background var(--t), opacity var(--t);
+}
+.dv-pcard:hover { background: var(--surface-3); border-color: var(--line-strong); }
+/* Dimmed rather than hidden: the ones left out stay readable, so it is obvious
+   the filter is on and who it dropped. */
+.dv-pcard:not(.is-on) { opacity: 0.4; }
+.dv-pcard.is-picked { border-color: var(--accent); background: var(--accent-wash); }
+.dv-pcard-av {
+    position: relative; width: 46px; height: 46px; flex: none; overflow: hidden;
+    background: var(--surface-3); border: 1px solid var(--line);
+    display: flex; align-items: center; justify-content: center;
+}
+.dv-pcard-av::after {
+    content: attr(data-initials); font-family: var(--font-mono); font-weight: 700;
+    font-size: var(--fs-sm); color: var(--text-secondary);
+}
+.dv-pcard-av.has-img::after { content: none; }
+.dv-pcard-av img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.dv-pcard-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.dv-pcard-name { font-family: var(--font-head); font-weight: 700; font-size: var(--fs-sm); color: var(--paper-100); overflow: hidden; text-overflow: ellipsis; }
+.dv-pcard-sub { display: flex; align-items: center; gap: 7px; min-height: 20px; }
+.dv-pcard-lvl { width: 20px; height: 20px; flex: none; }
+.dv-pcard-lvl[hidden] { display: none; }
+.dv-pcard-elo { font-family: var(--font-head); font-weight: 800; font-size: var(--fs-xs); color: var(--accent); }
+.dv-pcard-n { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--text-muted); }
+
+.dv-cine-choose { width: 100%; margin-top: 6px; display: flex; justify-content: center; gap: 8px; }
+.dv-cine-choose-n { font-family: var(--font-mono); font-weight: 600; color: var(--accent); }

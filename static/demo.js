@@ -856,10 +856,8 @@
 
     /* Whose lineups to watch. An empty set means everyone, which keeps "no
        filter" as the resting state instead of ten entries that all have to stay
-       ticked. The chips are built when the picker opens, not at startup: the
-       roster only exists once a demo is loaded. */
+       ticked — and it is also what the roster sheet resets to. */
     const cinePlayerSel = new Set();
-    const cinePlayerWrap = $('dvCinePlayers');
 
     function cineSidOf(f) {
         if (f.sid) return String(f.sid);
@@ -867,14 +865,98 @@
         return p && p.steamid ? String(p.steamid) : '';
     }
 
-    function cinePlayersRender() {
-        cinePlayerWrap.innerHTML = ((D && D.players) || []).map(p => {
+    const pchoose = $('dvPChoose'), pchooseGrid = $('dvPChooseGrid');
+
+    /* Picking whose lineups to watch is a visual decision — a row of ten names
+       does not tell you which one is the player you meant, but a face and an elo
+       do. So the roster opens as the same cards the cinematic shows, over a
+       dimmed screen. Click takes one, shift-click builds a group. */
+    function pchooseRender() {
+        pchooseGrid.innerHTML = ((D && D.players) || []).map(p => {
             const sid = String(p.steamid || '');
-            return '<button class="dv-cine-ty dv-cine-pl" type="button" data-sid="' + sid +
-                '"><span class="dv-cine-ty-l">' + esc(p.name || '?') +
-                '</span><b class="dv-cine-ty-n"></b></button>';
+            return '<button class="dv-pcard" type="button" data-sid="' + sid + '">' +
+                '<span class="dv-pcard-av" data-initials="' + esc(plInitials(p.name)) + '"></span>' +
+                '<span class="dv-pcard-id">' +
+                    '<span class="dv-pcard-name">' + esc(p.name || '?') + '</span>' +
+                    '<span class="dv-pcard-sub"><img class="dv-pcard-lvl" alt="" hidden>' +
+                    '<b class="dv-pcard-elo"></b></span>' +
+                    '<span class="dv-pcard-n"></span>' +
+                '</span></button>';
         }).join('');
+        pchooseGrid.querySelectorAll('.dv-pcard').forEach(c => {
+            const av = c.querySelector('.dv-pcard-av');
+            playerAvatar(c.dataset.sid).then(fp => {
+                if (!fp) return;
+                if (fp.elo) c.querySelector('.dv-pcard-elo').textContent = fp.elo.toLocaleString('en-US');
+                if (fp.lvl) {
+                    const l = c.querySelector('.dv-pcard-lvl');
+                    l.src = '/static/faceit_levels/' + fp.lvl + '.png'; l.hidden = false;
+                }
+                if (!fp.url) return;
+                const im = new Image(); im.alt = '';
+                im.onload = () => { av.classList.add('has-img'); av.appendChild(im); };
+                im.src = fp.url;
+            });
+        });
+        pchoosePaint();
     }
+
+    function pchoosePaint() {
+        pchooseGrid.querySelectorAll('.dv-pcard').forEach(c => {
+            const sid = c.dataset.sid;
+            const on = !cinePlayerSel.size || cinePlayerSel.has(sid);
+            c.classList.toggle('is-on', on);
+            c.classList.toggle('is-picked', cinePlayerSel.has(sid));
+            c.querySelector('.dv-pcard-n').textContent =
+                T('dv.cine.pcardN', { n: cineReel(cineSel, cineSide, new Set([sid])).length });
+        });
+        // The sheet only covers the picker, it does not replace it: shift-picking
+        // a third player has to move the count behind it there and then, not
+        // when the sheet is dismissed.
+        cinePickPaint();
+    }
+
+    function pchooseLabel() {
+        const n = cinePlayerSel.size;
+        if (!n) return T('dv.cine.chooseAll');
+        if (n === 1) {
+            const sid = [...cinePlayerSel][0];
+            const p = ((D && D.players) || []).find(x => String(x.steamid) === sid);
+            return p ? p.name : T('dv.cine.chooseN', { n: 1 });
+        }
+        return T('dv.cine.chooseN', { n: n });
+    }
+
+    function pchooseOpen(on) {
+        pchoose.classList.toggle('open', !!on);
+        if (on) pchooseRender();
+        else { cinePickPaint(); }
+    }
+
+    pchooseGrid.addEventListener('click', e => {
+        const c = e.target.closest('.dv-pcard');
+        if (!c) return;
+        const sid = c.dataset.sid;
+        if (e.shiftKey) {
+            // shift is the "and also" gesture, so it never closes the sheet
+            cinePlayerSel.has(sid) ? cinePlayerSel.delete(sid) : cinePlayerSel.add(sid);
+            pchoosePaint();
+            return;
+        }
+        cinePlayerSel.clear();
+        cinePlayerSel.add(sid);
+        pchoosePaint();
+        pchooseOpen(false);
+    });
+
+    $('dvCineChoose').addEventListener('click', () => pchooseOpen(true));
+    $('dvPChooseX').addEventListener('click', () => pchooseOpen(false));
+    $('dvPChooseOk').addEventListener('click', () => pchooseOpen(false));
+    $('dvPChooseAll').addEventListener('click', () => {
+        cinePlayerSel.clear(); pchoosePaint(); pchooseOpen(false);
+    });
+    pchoose.addEventListener('click', e => { if (e.target === pchoose) pchooseOpen(false); });
+
     let cine = null;                        // null whenever the mode is off
 
     const angGap = (a, b) => Math.abs(((b - a + 540) % 360) - 180);
@@ -982,13 +1064,7 @@
             b.querySelector('.dv-cine-ty-l').textContent = T(s === 'ct' ? 'dv.cine.sideCt' : 'dv.cine.sideT');
             b.querySelector('.dv-cine-ty-n').textContent = cineReel(cineSel, new Set([s]), cinePlayerSel).length;
         });
-        cinePlayerWrap.querySelectorAll('.dv-cine-pl').forEach(b => {
-            const sid = b.dataset.sid, on = !cinePlayerSel.size || cinePlayerSel.has(sid);
-            b.classList.toggle('is-on', on);
-            b.setAttribute('aria-pressed', on ? 'true' : 'false');
-            b.querySelector('.dv-cine-ty-n').textContent =
-                cineReel(cineSel, cineSide, new Set([sid])).length;
-        });
+        $('dvCineChooseN').textContent = pchooseLabel();
         $('dvCineCount').textContent = n ? T('dv.cine.count', { n: n, all: all }) : T('dv.cine.none');
         $('dvCineStart').disabled = !n;
     }
@@ -997,7 +1073,6 @@
         if (!on) return;
         // The roster belongs to the demo on screen, so the chips are rebuilt on
         // every open and any selection left over from another demo is dropped.
-        cinePlayersRender();
         cinePlayerSel.clear();
         cinePickPaint();
     }
@@ -1010,19 +1085,6 @@
         cineSel.has(b.dataset.t) ? cineSel.delete(b.dataset.t) : cineSel.add(b.dataset.t);
         cinePickPaint();
     });
-    cinePlayerWrap.addEventListener('click', e => {
-        const b = e.target.closest('.dv-cine-pl');
-        if (!b) return;
-        const sid = b.dataset.sid;
-        // First click on a full roster means "only this one" rather than
-        // "everyone except this one", which is what a set of ten minus one would
-        // have meant and never what anybody wants from a filter like this.
-        if (!cinePlayerSel.size) cinePlayerSel.add(sid);
-        else if (cinePlayerSel.has(sid)) cinePlayerSel.delete(sid);
-        else cinePlayerSel.add(sid);
-        cinePickPaint();
-    });
-
     cineSideWrap.addEventListener('click', e => {
         const b = e.target.closest('.dv-cine-sd');
         if (!b) return;
@@ -2012,7 +2074,10 @@
             ctx.fillStyle = '#fff'; ctx.fillText(bl.toFixed(1), px + 9, py - 6);
         }
         
-        if (showNames) {
+        // The cinematic card already names the thrower, right under him and in
+        // full — repeating it in nine clipped characters over his head is noise
+        // on top of the one shot that is meant to be clean.
+        if (showNames && !(cine && !cineCard.hidden && idx === cine.shots[cine.at].idx)) {
             const nm = nameOf(idx); const short = nm.length > 9 ? nm.slice(0, 9) : nm;
             ctx.font = (7.4 * ovs()).toFixed(1) + 'px "IBM Plex Mono", monospace'; ctx.textAlign = 'center';
             ctx.lineWidth = 1.8; ctx.strokeStyle = 'rgba(10,10,8,0.85)'; ctx.strokeText(short, px, py - 10);
